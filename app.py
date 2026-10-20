@@ -72,137 +72,68 @@ def cargar_padron():
         st.error(f"Error cargando Padron_Comisiones: {e}")
         return pd.DataFrame()
 
-def obtener_alumnos_esperados(comision_seleccionada, fecha_str):
-    hojas_asistencia = ["Asistencia A", "Asistencia B", "Asistencia C", "Asistencia D"]
-    estado_alumnos = {}
+# -------------------------------------------------------------------
+# FUNCIÓN PARA OBTENER ALUMNOS Y CRUZAR CON LA ASISTENCIA DIARIA
+# -------------------------------------------------------------------
+def obtener_alumnos_esperados(comision_seleccionada, fecha_hoy):
+    try:
+        # 1. Cargar alumnos de la comisión seleccionada desde Padron_Comisiones
+        sheet_padron = sh.worksheet("Padron_Comisiones")
+        df_padron = pd.DataFrame(sheet_padron.get_all_records())
+        df_grupo = df_padron[df_padron["Materia - Docente"] == comision_seleccionada].copy()
+        
+        # Estado por defecto
+        df_grupo["Estado"] = "Presente"
 
-    for nombre_hoja in hojas_asistencia:
-        try:
-            ws = sh.worksheet(nombre_hoja)
-            datos = ws.get_all_values()
-            if not datos or len(datos) < 2:
-                continue
-            
-            headers = [str(h).strip() for h in datos[0]]
-            col_idx = -1
-            for idx, h in enumerate(headers):
-                if h == fecha_str or h.startswith(fecha_str):
-                    col_idx = idx
-                    break
-            
-            for fila in datos[1:]:
-                if len(fila) > 0:
-                    nombre_alumno = str(fila[0]).strip()
-                    estado = str(fila[col_idx]).strip().upper() if (col_idx != -1 and len(fila) > col_idx) else "P"
-                    estado_alumnos[nombre_alumno] = estado
-        except Exception:
-            continue
+        # Formatos posibles para la fecha de hoy en la fila 1 de la planilla (ej: "20/10")
+        hoy_dt = datetime.now()
+        fecha_buscar_1 = f"{hoy_dt.day}/{hoy_dt.month}"
+        fecha_buscar_2 = hoy_dt.strftime("%d/%m")
 
-    df_padron = cargar_padron()
-    if df_padron.empty:
+        # 2. Buscar asistencia en las pestañas Asistencia A, B, C, D
+        divisiones = df_grupo["Division"].unique()
+        
+        for div in divisiones:
+            # Obtener la letra de la división (ej: "4A" -> "A")
+            letra_div = str(div).replace("4", "").strip().upper()
+            nombre_pestaña = f"Asistencia {letra_div}"
+            
+            try:
+                sheet_div = sh.worksheet(nombre_pestaña)
+                records = sheet_div.get_all_records()
+                if not records:
+                    continue
+                df_div = pd.DataFrame(records)
+                
+                # Identificar la columna de la fecha actual
+                col_fecha = None
+                for col in df_div.columns:
+                    col_str = str(col).strip()
+                    if col_str in [fecha_buscar_1, fecha_buscar_2]:
+                        col_fecha = col
+                        break
+                
+                # Si encontró la columna de hoy y la columna Alumno
+                if col_fecha and "Alumno" in df_div.columns:
+                    for _, row_div in df_div.iterrows():
+                        nombre_alum = str(row_div["Alumno"]).strip()
+                        val_asistencia = str(row_div[col_fecha]).strip().upper()
+                        
+                        # Si tiene una 'A' en la planilla diaria, está ausente en el colegio
+                        if val_asistencia == "A":
+                            df_grupo.loc[df_grupo["Alumno"].str.strip() == nombre_alum, "Estado"] = "Ausente"
+            except Exception:
+                pass
+
+        return df_grupo
+    except Exception as e:
+        st.error(f"Error al procesar la asistencia: {e}")
         return pd.DataFrame()
 
-    df_padron["Alumno"] = df_padron["Alumno"].astype(str).str.strip()
-    df_padron["Materia_Comision"] = df_padron["Materia_Comision"].astype(str).str.strip()
 
-    df_comision = df_padron[df_padron["Materia_Comision"] == comision_seleccionada].copy()
-    df_comision["Estado_Matutino"] = df_comision["Alumno"].map(lambda x: estado_alumnos.get(x, "P"))
-    
-    # P, T1 (tomados como presentes) y T (llegadas tardes) están presentes en la escuela
-    estados_validos_en_escuela = ["P", "T1", "T"]
-    
-    esperados = df_comision[df_comision["Estado_Matutino"].isin(estados_validos_en_escuela)].copy()
-    return esperados.sort_values(by="Alumno")
-
-def enviar_email_alerta(alumnos_fuga, comision, docente, fecha_str, hora_str):
-    try:
-        cfg = st.secrets["email"]
-        msg = MIMEMultipart()
-        msg['From'] = cfg["sender_email"]
-        msg['To'] = ", ".join(cfg["recipients"])
-        msg['Subject'] = f"⚠️ ALERTA DE FUGA EN AULA - {comision}"
-
-        lista_alumnos = "\n".join([f"- {a}" for a in alumnos_fuga])
-        cuerpo = f"""
-        Se ha registrado una inasistencia no justificada en aula (fuga):
-
-        • Fecha y Hora: {fecha_str} {hora_str}
-        • Materia / Comisión: {comision}
-        • Docente: {docente}
-
-        Estudiantes ausentes en aula:
-        {lista_alumnos}
-
-        Este mensaje fue generado automáticamente por el sistema de Control de Asistencia.
-        """
-        msg.attach(MIMEText(cuerpo, 'plain'))
-
-        with smtplib.SMTP_SSL(cfg["smtp_server"], int(cfg["smtp_port"])) as server:
-            server.login(cfg["sender_email"], cfg["sender_password"])
-            server.sendmail(cfg["sender_email"], cfg["recipients"], msg.as_string())
-        return True
-    except Exception as e:
-        st.warning(f"No se pudo enviar el correo de alerta: {e}")
-        return False
-
-def registrar_fuga(alumnos_fuga, comision, docente, fecha_str, hora_str):
-    try:
-        ws = sh.worksheet("Alertas_Fugas")
-        filas = []
-        for alumno in alumnos_fuga:
-            filas.append([fecha_str, hora_str, alumno, comision, docente])
-        ws.append_rows(filas)
-        enviar_email_alerta(alumnos_fuga, comision, docente, fecha_str, hora_str)
-        return True
-    except Exception as e:
-        st.error(f"Error al registrar alerta en Google Sheets: {e}")
-        return False
-
-# ---------------------------------------------------------
-# INTERFAZ DE USUARIO
-# ---------------------------------------------------------
-st.title("🏫 Control de Asistencia en Aula")
-
-df_padron = cargar_padron()
-
-if df_padron.empty:
-    st.warning("No se encontraron datos en 'Padron_Comisiones'. Por favor verifica la planilla.")
-    st.stop()
-
-# Selección de fecha y hora actual
-ahora = datetime.now()
-fecha_hoy = ahora.strftime("%d/%m")
-hora_actual = ahora.strftime("%H:%M")
-
-tab1, tab2 = st.tabs(["👤 Buscar por Docente", "📚 Buscar por Materia"])
-
-comision_seleccionada = None
-docente_actual = ""
-
-with tab1:
-    docentes_disponibles = sorted(df_padron["Docente"].dropna().unique().tolist())
-    docente_sel = st.selectbox("Seleccione Docente:", ["-- Seleccionar --"] + docentes_disponibles)
-    
-    if docente_sel != "-- Seleccionar --":
-        df_doc = df_padron[df_padron["Docente"] == docente_sel]
-        materias_doc = sorted(df_doc["Materia_Comision"].unique().tolist())
-        comision_seleccionada = st.selectbox("Seleccione Materia / Grupo:", materias_doc, key="sel_doc")
-        docente_actual = docente_sel
-
-with tab2:
-    materias_disponibles = sorted(df_padron["Materia"].dropna().unique().tolist())
-    materia_sel = st.selectbox("Seleccione Materia:", ["-- Seleccionar --"] + materias_disponibles)
-    
-    if materia_sel != "-- Seleccionar --":
-        df_mat = df_padron[df_padron["Materia"] == materia_sel]
-        comisiones_mat = sorted(df_mat["Materia_Comision"].unique().tolist())
-        comision_seleccionada = st.selectbox("Seleccione Grupo / Docente:", comisiones_mat, key="sel_mat")
-        if not df_mat.empty:
-            docente_actual = df_mat[df_mat["Materia_Comision"] == comision_seleccionada]["Docente"].values[0]
-
-# ---------------------------------------------------------
-# LISTADO DE ALUMNOS Y TOMA DE ASISTENCIA
-# ---------------------------------------------------------
+# -------------------------------------------------------------------
+# VISTA EN DOS COLUMNAS (PRESENTES Y AUSENTES)
+# -------------------------------------------------------------------
 if comision_seleccionada:
     st.divider()
     st.subheader("📋 Alumnos esperados en aula")
@@ -211,20 +142,29 @@ if comision_seleccionada:
     df_esperados = obtener_alumnos_esperados(comision_seleccionada, fecha_hoy)
 
     if df_esperados.empty:
-        st.info("No hay alumnos esperados para esta comisión (o los nombres no coinciden exactamente en la planilla).")
+        st.info("No se encontraron alumnos para esta comisión en Padron_Comisiones.")
     else:
-        # Creación del diseño en dos columnas
         col_presentes, col_ausentes = st.columns(2)
 
         ausentes_en_aula = []
+        ausentes_colegio = []
         presentes_en_aula = []
 
-        # COLUMNA IZQUIERDA: Presentes
+        # Filtrar quiénes ya figuran ausentes en el colegio
+        for index, row in df_esperados.iterrows():
+            if str(row.get("Estado", "")).strip().lower() == "ausente":
+                ausentes_colegio.append(f"{row['Alumno']} ({row['Division']})")
+
+        # COLUMNA IZQUIERDA: Presentes en Aula
         with col_presentes:
-            st.subheader("✅ Presentes")
-            st.caption("Desmarque a quienes NO estén en el aula")
+            st.subheader("✅ Presentes en Aula")
+            st.caption("Desmarque a quienes NO estén en la clase")
             
             for index, row in df_esperados.iterrows():
+                # Si el alumno está ausente en el colegio, se omite de esta lista
+                if str(row.get("Estado", "")).strip().lower() == "ausente":
+                    continue
+                
                 nombre_alumno = f"{row['Alumno']} ({row['Division']})"
                 
                 esta_presente = st.checkbox(
@@ -238,16 +178,25 @@ if comision_seleccionada:
                 else:
                     ausentes_en_aula.append(row['Alumno'])
 
-        # COLUMNA DERECHA: Ausentes
+        # COLUMNA DERECHA: Ausentes (Colegio + Aula)
         with col_ausentes:
             st.subheader("❌ Ausentes / Fugas")
-            st.caption("Alumnos fuera del aula")
+            st.caption("Alumnos fuera del aula o del colegio")
             
+            # 1. Ausentes reportados en el colegio
+            if ausentes_colegio:
+                st.markdown("**🏠 Ausentes en el Colegio (Planilla Diaria):**")
+                for alum in ausentes_colegio:
+                    st.warning(f"• {alum}")
+            
+            # 2. Ausentes en el aula / Fugas desmarcadas por el docente
             if ausentes_en_aula:
+                st.markdown("**🚨 Ausentes en Aula / Posible Fuga:**")
                 for ausente in ausentes_en_aula:
                     st.error(f"⚠️ {ausente}")
-            else:
-                st.success("Todos los alumnos se encuentran en el aula.")
+            
+            if not ausentes_colegio and not ausentes_en_aula:
+                st.success("Todos los alumnos de esta comisión están presentes en la clase.")
 
         st.divider()
         
@@ -256,6 +205,6 @@ if comision_seleccionada:
             if ausentes_en_aula:
                 exito = registrar_fuga(ausentes_en_aula, comision_seleccionada, docente_actual, fecha_hoy, hora_actual)
                 if exito:
-                    st.error(f"⚠️ Alerta registrada y enviada para {len(ausentes_en_aula)} alumno(s) ausente(s).")
+                    st.error(f"⚠️ Alerta registrada y enviada para {len(ausentes_en_aula)} alumno(s) ausente(s) en aula.")
             else:
-                st.success("✅ Asistencia completa. Todos los alumnos esperados están presentes en el aula.")
+                st.success("✅ Asistencia confirmada.")
