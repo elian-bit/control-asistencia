@@ -3,6 +3,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+import unicodedata
 
 # -------------------------------------------------------------------
 # CONFIGURACIÓN DE PÁGINA
@@ -12,6 +13,17 @@ st.set_page_config(
     page_icon="🏫",
     layout="wide"
 )
+
+# -------------------------------------------------------------------
+# FUNCIONES DE NORMALIZACIÓN Y AYUDA
+# -------------------------------------------------------------------
+def normalizar_texto(texto):
+    if not texto:
+        return ""
+    texto = str(texto).lower().strip()
+    texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('utf-8')
+    texto = texto.replace(',', ' ').replace('-', ' ').replace('_', ' ')
+    return " ".join(texto.split())
 
 # -------------------------------------------------------------------
 # CONEXIÓN A GOOGLE SHEETS
@@ -40,26 +52,25 @@ def cargar_padron():
         sheet_padron = sh.worksheet("Padron_Comisiones")
         df_padron = pd.DataFrame(sheet_padron.get_all_records())
         
-        # Mapeo y normalización de columnas para evitar fallos por tildes o espacios
         col_map = {}
         for c in df_padron.columns:
             c_clean = str(c).strip()
-            if c_clean.lower() in ["división", "division"]:
+            c_norm = normalizar_texto(c_clean)
+            if "division" in c_norm:
                 col_map[c] = "Division"
-            elif c_clean.lower() in ["alumno", "alumnos"]:
+            elif "alumno" in c_norm:
                 col_map[c] = "Alumno"
-            elif c_clean.lower() in ["materia", "materias"]:
-                col_map[c] = "Materia"
-            elif c_clean.lower() in ["docente", "docentes"]:
-                col_map[c] = "Docente"
-            elif "materia" in c_clean.lower() and "docente" in c_clean.lower():
+            elif "materia" in c_norm and "docente" in c_norm:
                 col_map[c] = "Materia - Docente"
+            elif "materia" in c_norm:
+                col_map[c] = "Materia"
+            elif "docente" in c_norm:
+                col_map[c] = "Docente"
             else:
                 col_map[c] = c_clean
                 
         df_padron = df_padron.rename(columns=col_map)
         
-        # Generar "Materia - Docente" si no vino armada
         if "Materia - Docente" not in df_padron.columns:
             if "Materia" in df_padron.columns and "Docente" in df_padron.columns:
                 df_padron["Materia - Docente"] = df_padron["Materia"].astype(str).str.strip() + " - " + df_padron["Docente"].astype(str).str.strip()
@@ -68,6 +79,25 @@ def cargar_padron():
     except Exception as e:
         st.error(f"Error al cargar Padron_Comisiones: {e}")
         return pd.DataFrame()
+
+# -------------------------------------------------------------------
+# BÚSQUEDA ROBUSTA DE HOJA DE ASISTENCIA
+# -------------------------------------------------------------------
+def buscar_hoja_asistencia(sh, letra_div):
+    letra_target = letra_div.upper().strip()
+    try:
+        return sh.worksheet(f"Asistencia {letra_target}")
+    except Exception:
+        pass
+    
+    try:
+        for ws in sh.worksheets():
+            t_norm = normalizar_texto(ws.title)
+            if f"asistencia {letra_target.lower()}" in t_norm or t_norm.endswith(letra_target.lower()):
+                return ws
+    except Exception:
+        pass
+    return None
 
 # -------------------------------------------------------------------
 # FUNCIÓN REGISTRAR FUGA
@@ -90,49 +120,54 @@ def registrar_fuga(ausentes, comision, docente, fecha, hora):
 # -------------------------------------------------------------------
 def obtener_alumnos_esperados(df_padron, comision_seleccionada):
     try:
-        df_grupo = df_padron[df_padron["Materia - Docente"].astype(str).str.strip() == str(comision_seleccionada).strip()].copy()
+        com_norm = normalizar_texto(comision_seleccionada)
+        df_padron["_com_norm"] = df_padron["Materia - Docente"].apply(normalizar_texto)
+        df_grupo = df_padron[df_padron["_com_norm"] == com_norm].copy()
+        
+        if df_grupo.empty:
+            return pd.DataFrame()
+
         df_grupo["Estado"] = "Presente"
+        df_grupo["_alum_norm"] = df_grupo["Alumno"].apply(normalizar_texto)
 
         hoy_dt = datetime.now()
         fecha_buscar_1 = f"{hoy_dt.day}/{hoy_dt.month}"
         fecha_buscar_2 = hoy_dt.strftime("%d/%m")
+        fecha_buscar_3 = hoy_dt.strftime("%d/%m/%Y")
 
         divisiones = df_grupo["Division"].unique() if "Division" in df_grupo.columns else []
         
         for div in divisiones:
-            letra_div = str(div).replace("4", "").strip().upper()
-            nombre_pestaña = f"Asistencia {letra_div}"
-            
-            try:
-                sheet_div = sh.worksheet(nombre_pestaña)
-                records = sheet_div.get_all_records()
-                if not records:
-                    continue
-                df_div = pd.DataFrame(records)
-                df_div.columns = [str(c).strip() for c in df_div.columns]
+            div_str = str(div).strip()
+            letra_div = "".join([c for c in div_str if c.isalpha()]).upper()
+            if not letra_div:
+                letra_div = div_str
                 
-                col_fecha = None
-                for col in df_div.columns:
-                    col_str = str(col).strip()
-                    if col_str in [fecha_buscar_1, fecha_buscar_2]:
-                        col_fecha = col
-                        break
-                
-                col_alumno_div = None
-                for col in df_div.columns:
-                    if str(col).strip().lower() in ["alumno", "alumnos"]:
-                        col_alumno_div = col
-                        break
+            sheet_div = buscar_hoja_asistencia(sh, letra_div)
+            if not sheet_div:
+                continue
 
-                if col_fecha and col_alumno_div:
-                    for _, row_div in df_div.iterrows():
-                        nombre_alum = str(row_div[col_alumno_div]).strip()
-                        val_asistencia = str(row_div[col_fecha]).strip().upper()
+            values = sheet_div.get_all_values()
+            if not values or len(values) < 2:
+                continue
+
+            headers = [str(h).strip() for h in values[0]]
+            
+            col_idx = -1
+            for idx, h in enumerate(headers):
+                h_norm = h.replace(" ", "")
+                if fecha_buscar_1 in h_norm or fecha_buscar_2 in h_norm or fecha_buscar_3 in h_norm:
+                    col_idx = idx
+                    break
+
+            if col_idx != -1:
+                for row in values[1:]:
+                    if len(row) > col_idx:
+                        nombre_alum_hoja = normalizar_texto(row[0])
+                        val_asistencia = str(row[col_idx]).strip().upper()
                         
-                        if val_asistencia == "A":
-                            df_grupo.loc[df_grupo["Alumno"].astype(str).str.strip() == nombre_alum, "Estado"] = "Ausente"
-            except Exception:
-                pass
+                        if val_asistencia == "A" or val_asistencia.startswith("A") or val_asistencia == "AUSENTE":
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
 
         return df_grupo
     except Exception as e:
