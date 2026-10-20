@@ -205,14 +205,15 @@ with tab2:
 # ---------------------------------------------------------
 if comision_seleccionada:
     st.divider()
-    st.subheader(f"📋 Alumnos esperados en aula")
+    st.subheader("📋 Alumnos esperados en aula")
     st.caption(f"Comisión: **{comision_seleccionada}** | Fecha: **{fecha_hoy}**")
 
     df_esperados = obtener_alumnos_esperados(comision_seleccionada, fecha_hoy)
 
     if df_esperados.empty:
-        st.info("No hay alumnos esperados para esta comisión (o todos están ausentes en el colegio).")
-   # Creación del diseño en dos columnas
+        st.info("No hay alumnos esperados para esta comisión (o los nombres no coinciden exactamente en la planilla).")
+    else:
+        # Creación del diseño en dos columnas
         col_presentes, col_ausentes = st.columns(2)
 
         ausentes_en_aula = []
@@ -249,6 +250,8 @@ if comision_seleccionada:
                 st.success("Todos los alumnos se encuentran en el aula.")
 
         st.divider()
+        
+        # BOTÓN DE CONFIRMACIÓN Y REGISTRO
         if st.button("🚨 Confirmar Asistencia / Reportar Ausentes", type="primary"):
             if ausentes_en_aula:
                 exito = registrar_fuga(ausentes_en_aula, comision_seleccionada, docente_actual, fecha_hoy, hora_actual)
