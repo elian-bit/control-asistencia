@@ -13,7 +13,7 @@ from email.mime.multipart import MIMEMultipart
 st.set_page_config(
     page_title="Control de Asistencia",
     page_icon="🏫",
-    layout="centered"
+    layout="wide"
 )
 
 # ---------------------------------------------------------
@@ -212,16 +212,41 @@ if comision_seleccionada:
 
     if df_esperados.empty:
         st.info("No hay alumnos esperados para esta comisión (o todos están ausentes en el colegio).")
-    else:
-        st.write("Desmarque los alumnos que **NO están presentes** en el aula:")
-        
+   # Creación del diseño en dos columnas
+        col_presentes, col_ausentes = st.columns(2)
+
         ausentes_en_aula = []
-        for _, row in df_esperados.iterrows():
-            alumno_nombre = row["Alumno"]
-            # Por defecto marcado como Presente (True)
-            presente = st.checkbox(f"{alumno_nombre} (División {row['Division']})", value=True, key=f"chk_{alumno_nombre}")
-            if not presente:
-                ausentes_en_aula.append(alumno_nombre)
+        presentes_en_aula = []
+
+        # COLUMNA IZQUIERDA: Presentes
+        with col_presentes:
+            st.subheader("✅ Presentes")
+            st.caption("Desmarque a quienes NO estén en el aula")
+            
+            for index, row in df_esperados.iterrows():
+                nombre_alumno = f"{row['Alumno']} ({row['Division']})"
+                
+                esta_presente = st.checkbox(
+                    nombre_alumno, 
+                    value=True, 
+                    key=f"check_{index}_{row['Alumno']}"
+                )
+                
+                if esta_presente:
+                    presentes_en_aula.append(row['Alumno'])
+                else:
+                    ausentes_en_aula.append(row['Alumno'])
+
+        # COLUMNA DERECHA: Ausentes
+        with col_ausentes:
+            st.subheader("❌ Ausentes / Fugas")
+            st.caption("Alumnos fuera del aula")
+            
+            if ausentes_en_aula:
+                for ausente in ausentes_en_aula:
+                    st.error(f"⚠️ {ausente}")
+            else:
+                st.success("Todos los alumnos se encuentran en el aula.")
 
         st.divider()
         if st.button("🚨 Confirmar Asistencia / Reportar Ausentes", type="primary"):
