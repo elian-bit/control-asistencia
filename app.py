@@ -40,10 +40,26 @@ def cargar_padron():
         sheet_padron = sh.worksheet("Padron_Comisiones")
         df_padron = pd.DataFrame(sheet_padron.get_all_records())
         
-        # Limpiar espacios en los nombres de columnas
-        df_padron.columns = [str(c).strip() for c in df_padron.columns]
+        # Mapeo y normalización de columnas para evitar fallos por tildes o espacios
+        col_map = {}
+        for c in df_padron.columns:
+            c_clean = str(c).strip()
+            if c_clean.lower() in ["división", "division"]:
+                col_map[c] = "Division"
+            elif c_clean.lower() in ["alumno", "alumnos"]:
+                col_map[c] = "Alumno"
+            elif c_clean.lower() in ["materia", "materias"]:
+                col_map[c] = "Materia"
+            elif c_clean.lower() in ["docente", "docentes"]:
+                col_map[c] = "Docente"
+            elif "materia" in c_clean.lower() and "docente" in c_clean.lower():
+                col_map[c] = "Materia - Docente"
+            else:
+                col_map[c] = c_clean
+                
+        df_padron = df_padron.rename(columns=col_map)
         
-        # Generar "Materia - Docente" si están en columnas separadas
+        # Generar "Materia - Docente" si no vino armada
         if "Materia - Docente" not in df_padron.columns:
             if "Materia" in df_padron.columns and "Docente" in df_padron.columns:
                 df_padron["Materia - Docente"] = df_padron["Materia"].astype(str).str.strip() + " - " + df_padron["Docente"].astype(str).str.strip()
@@ -74,14 +90,14 @@ def registrar_fuga(ausentes, comision, docente, fecha, hora):
 # -------------------------------------------------------------------
 def obtener_alumnos_esperados(df_padron, comision_seleccionada):
     try:
-        df_grupo = df_padron[df_padron["Materia - Docente"] == comision_seleccionada].copy()
+        df_grupo = df_padron[df_padron["Materia - Docente"].astype(str).str.strip() == str(comision_seleccionada).strip()].copy()
         df_grupo["Estado"] = "Presente"
 
         hoy_dt = datetime.now()
         fecha_buscar_1 = f"{hoy_dt.day}/{hoy_dt.month}"
         fecha_buscar_2 = hoy_dt.strftime("%d/%m")
 
-        divisiones = df_grupo["Division"].unique()
+        divisiones = df_grupo["Division"].unique() if "Division" in df_grupo.columns else []
         
         for div in divisiones:
             letra_div = str(div).replace("4", "").strip().upper()
@@ -102,9 +118,15 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada):
                         col_fecha = col
                         break
                 
-                if col_fecha and "Alumno" in df_div.columns:
+                col_alumno_div = None
+                for col in df_div.columns:
+                    if str(col).strip().lower() in ["alumno", "alumnos"]:
+                        col_alumno_div = col
+                        break
+
+                if col_fecha and col_alumno_div:
                     for _, row_div in df_div.iterrows():
-                        nombre_alum = str(row_div["Alumno"]).strip()
+                        nombre_alum = str(row_div[col_alumno_div]).strip()
                         val_asistencia = str(row_div[col_fecha]).strip().upper()
                         
                         if val_asistencia == "A":
@@ -137,10 +159,10 @@ if sh:
         
         with tab1:
             if "Docente" in df_padron.columns:
-                docentes = sorted(df_padron["Docente"].astype(str).unique().tolist())
+                docentes = sorted(df_padron["Docente"].astype(str).str.strip().unique().tolist())
                 docente_sel = st.selectbox("Seleccione Docente:", docentes, key="sel_docente")
                 
-                df_docente = df_padron[df_padron["Docente"] == docente_sel]
+                df_docente = df_padron[df_padron["Docente"].astype(str).str.strip() == docente_sel]
                 materias_docente = df_docente["Materia - Docente"].unique().tolist()
                 
                 comision_docente = st.selectbox("Seleccione Materia / Grupo:", materias_docente, key="sel_mat_doc")
@@ -150,7 +172,7 @@ if sh:
 
         with tab2:
             if "Materia - Docente" in df_padron.columns:
-                comisiones_todas = sorted(df_padron["Materia - Docente"].astype(str).unique().tolist())
+                comisiones_todas = sorted(df_padron["Materia - Docente"].astype(str).str.strip().unique().tolist())
                 comision_mat = st.selectbox("Seleccione Materia / Grupo:", comisiones_todas, key="sel_mat_todas")
                 if comision_mat and not comision_seleccionada:
                     comision_seleccionada = comision_mat
