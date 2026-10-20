@@ -3,9 +3,6 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 # -------------------------------------------------------------------
 # CONFIGURACIÓN DE PÁGINA
@@ -36,6 +33,27 @@ def conectar_google_sheets():
 sh = conectar_google_sheets()
 
 # -------------------------------------------------------------------
+# FUNCIÓN CARGAR Y PREPARAR PADRÓN
+# -------------------------------------------------------------------
+def cargar_padron():
+    try:
+        sheet_padron = sh.worksheet("Padron_Comisiones")
+        df_padron = pd.DataFrame(sheet_padron.get_all_records())
+        
+        # Limpiar espacios en los nombres de columnas
+        df_padron.columns = [str(c).strip() for c in df_padron.columns]
+        
+        # Generar "Materia - Docente" si están en columnas separadas
+        if "Materia - Docente" not in df_padron.columns:
+            if "Materia" in df_padron.columns and "Docente" in df_padron.columns:
+                df_padron["Materia - Docente"] = df_padron["Materia"].astype(str).str.strip() + " - " + df_padron["Docente"].astype(str).str.strip()
+        
+        return df_padron
+    except Exception as e:
+        st.error(f"Error al cargar Padron_Comisiones: {e}")
+        return pd.DataFrame()
+
+# -------------------------------------------------------------------
 # FUNCIÓN REGISTRAR FUGA
 # -------------------------------------------------------------------
 def registrar_fuga(ausentes, comision, docente, fecha, hora):
@@ -54,12 +72,9 @@ def registrar_fuga(ausentes, comision, docente, fecha, hora):
 # -------------------------------------------------------------------
 # FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA DIARIA
 # -------------------------------------------------------------------
-def obtener_alumnos_esperados(comision_seleccionada):
+def obtener_alumnos_esperados(df_padron, comision_seleccionada):
     try:
-        sheet_padron = sh.worksheet("Padron_Comisiones")
-        df_padron = pd.DataFrame(sheet_padron.get_all_records())
         df_grupo = df_padron[df_padron["Materia - Docente"] == comision_seleccionada].copy()
-        
         df_grupo["Estado"] = "Presente"
 
         hoy_dt = datetime.now()
@@ -78,6 +93,7 @@ def obtener_alumnos_esperados(comision_seleccionada):
                 if not records:
                     continue
                 df_div = pd.DataFrame(records)
+                df_div.columns = [str(c).strip() for c in df_div.columns]
                 
                 col_fecha = None
                 for col in df_div.columns:
@@ -92,7 +108,7 @@ def obtener_alumnos_esperados(comision_seleccionada):
                         val_asistencia = str(row_div[col_fecha]).strip().upper()
                         
                         if val_asistencia == "A":
-                            df_grupo.loc[df_grupo["Alumno"].str.strip() == nombre_alum, "Estado"] = "Ausente"
+                            df_grupo.loc[df_grupo["Alumno"].astype(str).str.strip() == nombre_alum, "Estado"] = "Ausente"
             except Exception:
                 pass
 
@@ -114,33 +130,31 @@ comision_seleccionada = None
 docente_actual = ""
 
 if sh:
-    try:
-        sheet_padron = sh.worksheet("Padron_Comisiones")
-        df_padron = pd.DataFrame(sheet_padron.get_all_records())
-        
+    df_padron = cargar_padron()
+    
+    if not df_padron.empty:
         tab1, tab2 = st.tabs(["👤 Buscar por Docente", "📚 Buscar por Materia"])
         
         with tab1:
-            docentes = sorted(df_padron["Docente"].astype(str).unique().tolist())
-            docente_sel = st.selectbox("Seleccione Docente:", docentes, key="sel_docente")
-            
-            df_docente = df_padron[df_padron["Docente"] == docente_sel]
-            materias_docente = df_docente["Materia - Docente"].unique().tolist()
-            
-            comision_docente = st.selectbox("Seleccione Materia / Grupo:", materias_docente, key="sel_mat_doc")
-            if comision_docente:
-                comision_seleccionada = comision_docente
-                docente_actual = docente_sel
+            if "Docente" in df_padron.columns:
+                docentes = sorted(df_padron["Docente"].astype(str).unique().tolist())
+                docente_sel = st.selectbox("Seleccione Docente:", docentes, key="sel_docente")
+                
+                df_docente = df_padron[df_padron["Docente"] == docente_sel]
+                materias_docente = df_docente["Materia - Docente"].unique().tolist()
+                
+                comision_docente = st.selectbox("Seleccione Materia / Grupo:", materias_docente, key="sel_mat_doc")
+                if comision_docente:
+                    comision_seleccionada = comision_docente
+                    docente_actual = docente_sel
 
         with tab2:
-            comisiones_todas = sorted(df_padron["Materia - Docente"].astype(str).unique().tolist())
-            comision_mat = st.selectbox("Seleccione Materia / Grupo:", comisiones_todas, key="sel_mat_todas")
-            if comision_mat and not comision_seleccionada:
-                comision_seleccionada = comision_mat
-                docente_actual = df_padron[df_padron["Materia - Docente"] == comision_mat]["Docente"].values[0]
-
-    except Exception as e:
-        st.error(f"Error al cargar comisiones desde Padron_Comisiones: {e}")
+            if "Materia - Docente" in df_padron.columns:
+                comisiones_todas = sorted(df_padron["Materia - Docente"].astype(str).unique().tolist())
+                comision_mat = st.selectbox("Seleccione Materia / Grupo:", comisiones_todas, key="sel_mat_todas")
+                if comision_mat and not comision_seleccionada:
+                    comision_seleccionada = comision_mat
+                    docente_actual = df_padron[df_padron["Materia - Docente"] == comision_mat]["Docente"].values[0]
 
 # -------------------------------------------------------------------
 # VISTA EN DOS COLUMNAS (PRESENTES Y AUSENTES)
@@ -150,7 +164,7 @@ if comision_seleccionada:
     st.subheader("📋 Alumnos esperados en aula")
     st.caption(f"Comisión: **{comision_seleccionada}** | Fecha: **{fecha_hoy}**")
 
-    df_esperados = obtener_alumnos_esperados(comision_seleccionada)
+    df_esperados = obtener_alumnos_esperados(df_padron, comision_seleccionada)
 
     if df_esperados.empty:
         st.info("No se encontraron alumnos para esta comisión en Padron_Comisiones.")
@@ -165,7 +179,7 @@ if comision_seleccionada:
             if str(row.get("Estado", "")).strip().lower() == "ausente":
                 ausentes_colegio.append(f"{row['Alumno']} ({row['Division']})")
 
-        # COLUMNA IZQUIERDA: Presentes
+        # COLUMNA IZQUIERDA: Presentes en Aula
         with col_presentes:
             st.subheader("✅ Presentes en Aula")
             st.caption("Desmarque a quienes NO estén en la clase")
@@ -187,7 +201,7 @@ if comision_seleccionada:
                 else:
                     ausentes_en_aula.append(row['Alumno'])
 
-        # COLUMNA DERECHA: Ausentes
+        # COLUMNA DERECHA: Ausentes (Colegio + Aula)
         with col_ausentes:
             st.subheader("❌ Ausentes / Fugas")
             st.caption("Alumnos fuera del aula o del colegio")
