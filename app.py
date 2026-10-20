@@ -4,6 +4,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import unicodedata
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # -------------------------------------------------------------------
 # CONFIGURACIÓN DE PÁGINA
@@ -100,23 +103,71 @@ def buscar_hoja_asistencia(sh, letra_div):
     return None
 
 # -------------------------------------------------------------------
+# ENVÍO DE EMAIL DE ALERTA (SOLO A ELIAN@BUBER.EDU.AR)
+# -------------------------------------------------------------------
+def enviar_email_alerta(ausentes, comision, docente, fecha, hora):
+    try:
+        if "email" not in st.secrets:
+            return
+
+        remitente = st.secrets["email"]["user"]
+        password = st.secrets["email"]["password"]
+        
+        destinatarios = [
+            "Elian@buber.edu.ar"
+        ]
+
+        msg = MIMEMultipart()
+        msg["From"] = remitente
+        msg["To"] = ", ".join(destinatarios)
+        msg["Subject"] = f"🚨 ALERTA DE FUGA / AUSENCIA EN AULA - {comision}"
+
+        lista_alumnos = "\n".join([f"• {a}" for a in ausentes])
+        cuerpo = f"""
+Se ha registrado un reporte de inasistencia en aula / posible fuga:
+
+📅 Fecha / Hora: {fecha} - {hora} hs
+📚 Comisión / Grupo: {comision}
+👨‍🏫 Docente a cargo: {docente}
+
+⚠️ Alumnos ausentes en el aula:
+{lista_alumnos}
+
+---
+Mensaje enviado automáticamente por la App de Control de Asistencia.
+"""
+        msg.attach(MIMEText(cuerpo, "plain"))
+
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(remitente, password)
+        server.send_message(msg)
+        server.quit()
+    except Exception as e:
+        st.warning(f"No se pudo enviar la notificación por mail: {e}")
+
+# -------------------------------------------------------------------
 # FUNCIÓN REGISTRAR FUGA
 # -------------------------------------------------------------------
 def registrar_fuga(ausentes, comision, docente, fecha, hora):
     try:
+        # 1. Guarda en Google Sheets (Pestaña Fugas)
         try:
             sheet_fugas = sh.worksheet("Fugas")
             for alum in ausentes:
                 sheet_fugas.append_row([fecha, hora, alum, comision, docente, "Reportado por Docente"])
         except Exception:
             pass
+        
+        # 2. Envía alerta por Mail
+        enviar_email_alerta(ausentes, comision, docente, fecha, hora)
         return True
     except Exception as e:
         st.error(f"Error al registrar reporte: {e}")
         return False
 
 # -------------------------------------------------------------------
-# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA DIARIA (A y R)
+# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA DIARIA
 # -------------------------------------------------------------------
 def obtener_alumnos_esperados(df_padron, comision_seleccionada):
     try:
@@ -166,7 +217,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada):
                         nombre_alum_hoja = normalizar_texto(row[0])
                         val_asistencia = str(row[col_idx]).strip().upper()
                         
-                        # Detección de Ausente (A) o Retirado (R)
                         if val_asistencia in ["A", "AUSENTE"] or val_asistencia.startswith("A "):
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
                         elif val_asistencia in ["R", "RETIRO", "RETIRADO"] or val_asistencia.startswith("R "):
@@ -213,98 +263,3 @@ if sh:
                 comisiones_todas = sorted(df_padron["Materia - Docente"].astype(str).str.strip().unique().tolist())
                 comision_mat = st.selectbox("Seleccione Materia / Grupo:", comisiones_todas, key="sel_mat_todas")
                 if comision_mat and not comision_seleccionada:
-                    comision_seleccionada = comision_mat
-                    docente_actual = df_padron[df_padron["Materia - Docente"] == comision_mat]["Docente"].values[0]
-
-# -------------------------------------------------------------------
-# VISTA EN DOS COLUMNAS (PRESENTES Y AUSENTES/RETIRADOS)
-# -------------------------------------------------------------------
-if comision_seleccionada:
-    st.divider()
-    col_hdr1, col_hdr2 = st.columns([3, 1])
-    with col_hdr1:
-        st.subheader("📋 Alumnos esperados en aula")
-        st.caption(f"Comisión: **{comision_seleccionada}** | Fecha: **{fecha_hoy}**")
-    with col_hdr2:
-        if st.button("🔄 Actualizar Datos", help="Haga clic para sincronizar las novedades más recientes del colegio"):
-            st.rerun()
-
-    df_esperados = obtener_alumnos_esperados(df_padron, comision_seleccionada)
-
-    if df_esperados.empty:
-        st.info("No se encontraron alumnos para esta comisión en Padron_Comisiones.")
-    else:
-        col_presentes, col_ausentes = st.columns(2)
-
-        ausentes_en_aula = []
-        ausentes_colegio = []
-        retirados_colegio = []
-        presentes_en_aula = []
-
-        for index, row in df_esperados.iterrows():
-            est = str(row.get("Estado", "")).strip().lower()
-            if est == "ausente":
-                ausentes_colegio.append(f"{row['Alumno']} ({row['Division']})")
-            elif est == "retirado":
-                retirados_colegio.append(f"{row['Alumno']} ({row['Division']})")
-
-        # COLUMNA IZQUIERDA: Presentes en Aula
-        with col_presentes:
-            st.subheader("✅ Presentes en Aula")
-            st.caption("Desmarque a quienes NO estén en la clase")
-            
-            for index, row in df_esperados.iterrows():
-                est = str(row.get("Estado", "")).strip().lower()
-                # Se omiten ausentes y retirados del colegio
-                if est in ["ausente", "retirado"]:
-                    continue
-                
-                nombre_alumno = f"{row['Alumno']} ({row['Division']})"
-                
-                esta_presente = st.checkbox(
-                    nombre_alumno, 
-                    value=True, 
-                    key=f"check_{index}_{row['Alumno']}"
-                )
-                
-                if esta_presente:
-                    presentes_en_aula.append(row['Alumno'])
-                else:
-                    ausentes_en_aula.append(row['Alumno'])
-
-        # COLUMNA DERECHA: Ausentes y Retirados
-        with col_ausentes:
-            st.subheader("❌ Ausentes / Fugas")
-            st.caption("Alumnos fuera del aula o del colegio")
-            
-            # 1. Ausentes en el colegio (A)
-            if ausentes_colegio:
-                st.markdown("**🏠 Ausentes en el Colegio (Planilla Diaria):**")
-                for alum in ausentes_colegio:
-                    st.warning(f"• {alum}")
-            
-            # 2. Retirados del colegio (R)
-            if retirados_colegio:
-                st.markdown("**🚪 Retirados del Colegio:**")
-                for alum in retirados_colegio:
-                    st.warning(f"• {alum} *(Retirado)*")
-            
-            # 3. Ausentes en el aula / Fugas desmarcadas por el docente
-            if ausentes_en_aula:
-                st.markdown("**🚨 Ausentes en Aula / Posible Fuga:**")
-                for ausente in ausentes_en_aula:
-                    st.error(f"⚠️ {ausente}")
-            
-            if not ausentes_colegio and not retirados_colegio and not ausentes_en_aula:
-                st.success("Todos los alumnos de esta comisión están presentes en la clase.")
-
-        st.divider()
-        
-        # BOTÓN DE CONFIRMACIÓN
-        if st.button("🚨 Confirmar Asistencia / Reportar Ausentes", type="primary"):
-            if ausentes_en_aula:
-                exito = registrar_fuga(ausentes_en_aula, comision_seleccionada, docente_actual, fecha_hoy, hora_actual)
-                if exito:
-                    st.error(f"⚠️ Alerta registrada y enviada para {len(ausentes_en_aula)} alumno(s) ausente(s) en aula.")
-            else:
-                st.success("✅ Asistencia confirmada.")
