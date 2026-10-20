@@ -116,7 +116,7 @@ def registrar_fuga(ausentes, comision, docente, fecha, hora):
         return False
 
 # -------------------------------------------------------------------
-# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA DIARIA
+# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA DIARIA (A y R)
 # -------------------------------------------------------------------
 def obtener_alumnos_esperados(df_padron, comision_seleccionada):
     try:
@@ -166,8 +166,11 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada):
                         nombre_alum_hoja = normalizar_texto(row[0])
                         val_asistencia = str(row[col_idx]).strip().upper()
                         
-                        if val_asistencia == "A" or val_asistencia.startswith("A") or val_asistencia == "AUSENTE":
+                        # Detección de Ausente (A) o Retirado (R)
+                        if val_asistencia in ["A", "AUSENTE"] or val_asistencia.startswith("A "):
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
+                        elif val_asistencia in ["R", "RETIRO", "RETIRADO"] or val_asistencia.startswith("R "):
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
 
         return df_grupo
     except Exception as e:
@@ -214,12 +217,17 @@ if sh:
                     docente_actual = df_padron[df_padron["Materia - Docente"] == comision_mat]["Docente"].values[0]
 
 # -------------------------------------------------------------------
-# VISTA EN DOS COLUMNAS (PRESENTES Y AUSENTES)
+# VISTA EN DOS COLUMNAS (PRESENTES Y AUSENTES/RETIRADOS)
 # -------------------------------------------------------------------
 if comision_seleccionada:
     st.divider()
-    st.subheader("📋 Alumnos esperados en aula")
-    st.caption(f"Comisión: **{comision_seleccionada}** | Fecha: **{fecha_hoy}**")
+    col_hdr1, col_hdr2 = st.columns([3, 1])
+    with col_hdr1:
+        st.subheader("📋 Alumnos esperados en aula")
+        st.caption(f"Comisión: **{comision_seleccionada}** | Fecha: **{fecha_hoy}**")
+    with col_hdr2:
+        if st.button("🔄 Actualizar Datos", help="Haga clic para sincronizar las novedades más recientes del colegio"):
+            st.rerun()
 
     df_esperados = obtener_alumnos_esperados(df_padron, comision_seleccionada)
 
@@ -230,11 +238,15 @@ if comision_seleccionada:
 
         ausentes_en_aula = []
         ausentes_colegio = []
+        retirados_colegio = []
         presentes_en_aula = []
 
         for index, row in df_esperados.iterrows():
-            if str(row.get("Estado", "")).strip().lower() == "ausente":
+            est = str(row.get("Estado", "")).strip().lower()
+            if est == "ausente":
                 ausentes_colegio.append(f"{row['Alumno']} ({row['Division']})")
+            elif est == "retirado":
+                retirados_colegio.append(f"{row['Alumno']} ({row['Division']})")
 
         # COLUMNA IZQUIERDA: Presentes en Aula
         with col_presentes:
@@ -242,7 +254,9 @@ if comision_seleccionada:
             st.caption("Desmarque a quienes NO estén en la clase")
             
             for index, row in df_esperados.iterrows():
-                if str(row.get("Estado", "")).strip().lower() == "ausente":
+                est = str(row.get("Estado", "")).strip().lower()
+                # Se omiten ausentes y retirados del colegio
+                if est in ["ausente", "retirado"]:
                     continue
                 
                 nombre_alumno = f"{row['Alumno']} ({row['Division']})"
@@ -258,22 +272,30 @@ if comision_seleccionada:
                 else:
                     ausentes_en_aula.append(row['Alumno'])
 
-        # COLUMNA DERECHA: Ausentes (Colegio + Aula)
+        # COLUMNA DERECHA: Ausentes y Retirados
         with col_ausentes:
             st.subheader("❌ Ausentes / Fugas")
             st.caption("Alumnos fuera del aula o del colegio")
             
+            # 1. Ausentes en el colegio (A)
             if ausentes_colegio:
                 st.markdown("**🏠 Ausentes en el Colegio (Planilla Diaria):**")
                 for alum in ausentes_colegio:
                     st.warning(f"• {alum}")
             
+            # 2. Retirados del colegio (R)
+            if retirados_colegio:
+                st.markdown("**🚪 Retirados del Colegio:**")
+                for alum in retirados_colegio:
+                    st.warning(f"• {alum} *(Retirado)*")
+            
+            # 3. Ausentes en el aula / Fugas desmarcadas por el docente
             if ausentes_en_aula:
                 st.markdown("**🚨 Ausentes en Aula / Posible Fuga:**")
                 for ausente in ausentes_en_aula:
                     st.error(f"⚠️ {ausente}")
             
-            if not ausentes_colegio and not ausentes_en_aula:
+            if not ausentes_colegio and not retirados_colegio and not ausentes_en_aula:
                 st.success("Todos los alumnos de esta comisión están presentes en la clase.")
 
         st.divider()
