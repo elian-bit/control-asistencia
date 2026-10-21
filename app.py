@@ -180,7 +180,6 @@ Mensaje enviado automáticamente por la App de Control de Asistencia.
 # -------------------------------------------------------------------
 def registrar_fuga(ausentes, comision, docente, fecha, hora):
     try:
-        # 1. Guarda en Google Sheets (Pestaña Fugas)
         try:
             sheet_fugas = sh.worksheet("Fugas")
             for alum in ausentes:
@@ -188,7 +187,6 @@ def registrar_fuga(ausentes, comision, docente, fecha, hora):
         except Exception:
             pass
         
-        # 2. Envía alerta por Mail
         enviar_email_alerta(ausentes, comision, docente, fecha, hora)
         return True
     except Exception as e:
@@ -198,7 +196,7 @@ def registrar_fuga(ausentes, comision, docente, fecha, hora):
 # -------------------------------------------------------------------
 # FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA CON FILTRO EXCLUSIVO DE DIVISIÓN
 # -------------------------------------------------------------------
-def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_seleccionada="Todas"):
+def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_seleccionada):
     try:
         com_norm = normalizar_texto(comision_seleccionada)
         df_padron["_com_norm"] = df_padron["Materia - Docente"].apply(normalizar_texto)
@@ -207,10 +205,10 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
         if df_grupo.empty:
             return pd.DataFrame()
 
-        # Filtro estricto y normalizado por división
-        if division_seleccionada and division_seleccionada not in ["Todas", "-- Seleccionar Curso --"]:
-            div_target_norm = normalizar_texto(division_seleccionada)
-            df_grupo = df_grupo[df_grupo["Division"].apply(lambda x: normalizar_texto(str(x)) == div_target_norm)]
+        # Filtrar estrictamente por División si no se eligió "Todas las divisiones"
+        if division_seleccionada and division_seleccionada not in ["Todas las divisiones", "-- Seleccionar Curso --"]:
+            div_norm_target = normalizar_texto(division_seleccionada)
+            df_grupo = df_grupo[df_grupo["Division"].apply(lambda x: normalizar_texto(str(x)) == div_norm_target)]
 
         if df_grupo.empty:
             return pd.DataFrame()
@@ -243,7 +241,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
 
             headers = [str(h).strip() for h in values[0]]
             
-            # Buscar columna de la fecha
             col_idx = -1
             for idx, h in enumerate(headers):
                 h_norm = h.replace(" ", "")
@@ -251,7 +248,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                     col_idx = idx
                     break
 
-            # Buscar columnas del detalle de retiro (FF:FI / Alumno detalle, Fecha detalle, Bloque salida)
             col_alum_det = -1
             col_fecha_det = -1
             col_salida_det = -1
@@ -281,7 +277,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                                     "hora_inicio": hora_ini
                                 }
 
-            # Evaluar inasistencias y retiros
             for row in values[1:]:
                 if len(row) > 0:
                     nombre_alum_hoja = normalizar_texto(row[0])
@@ -296,7 +291,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                             hora_ini = info_det["hora_inicio"]
                             num_b = info_det["bloque"]
                             
-                            # Comparación exacta con hora Argentina
                             if hora_actual_str < hora_ini:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoRetiro"] = f"🚪 (Retiro prog.: Bloque {num_b} - {hora_ini} hs)"
@@ -335,72 +329,51 @@ fecha_hoy = hoy_dt.strftime("%d/%m/%Y")
 hora_actual = hoy_dt.strftime("%H:%M")
 
 comision_seleccionada = None
-division_seleccionada = "Todas"
+division_seleccionada = "-- Seleccionar Curso --"
 docente_actual = ""
 
 if sh:
     df_padron = cargar_padron()
     
     if not df_padron.empty:
-        modo_busqueda = st.radio("Buscar por:", ["👤 Docente", "📚 Materia"], horizontal=True)
+        col_filtro1, col_filtro2, col_filtro3 = st.columns(3)
         
-        if modo_busqueda == "👤 Docente":
-            if "Docente" in df_padron.columns:
-                docentes = sorted(df_padron["Docente"].astype(str).str.strip().unique().tolist())
-                docente_sel = st.selectbox("Seleccione Docente:", docentes, key="sel_docente")
-                
-                df_docente = df_padron[df_padron["Docente"].astype(str).str.strip() == docente_sel]
-                materias_docente = sorted(df_docente["Materia - Docente"].unique().tolist())
-                
-                comision_docente = st.selectbox("Seleccione Materia / Grupo:", materias_docente, key="sel_mat_doc")
-                if comision_docente:
+        with col_filtro1:
+            docentes = sorted(df_padron["Docente"].astype(str).str.strip().unique().tolist())
+            docente_sel = st.selectbox("1. Seleccione Docente:", ["-- Seleccionar Docente --"] + docentes, key="sel_docente_main")
+        
+        if docente_sel and docente_sel != "-- Seleccionar Docente --":
+            docente_actual = docente_sel
+            df_docente = df_padron[df_padron["Docente"].astype(str).str.strip() == docente_sel]
+            materias_docente = sorted(df_docente["Materia - Docente"].unique().tolist())
+            
+            with col_filtro2:
+                comision_docente = st.selectbox("2. Seleccione Materia / Grupo:", ["-- Seleccionar Materia --"] + materias_docente, key="sel_mat_main")
+                if comision_docente and comision_docente != "-- Seleccionar Materia --":
                     comision_seleccionada = comision_docente
-                    docente_actual = docente_sel
-
+                    
                     df_sub = df_docente[df_docente["Materia - Docente"] == comision_docente]
                     divs_posibles = sorted(df_sub["Division"].astype(str).str.strip().unique().tolist()) if "Division" in df_sub.columns else []
-
-                    if len(divs_posibles) > 1:
+                    
+                    with col_filtro3:
                         division_seleccionada = st.selectbox(
-                            "Seleccione Curso / División:",
-                            ["-- Seleccionar Curso --"] + divs_posibles + ["Todas"],
-                            key="sel_div_doc"
+                            "3. Seleccione Curso / División:",
+                            ["-- Seleccionar Curso --"] + divs_posibles + ["Todas las divisiones"],
+                            key="sel_div_main"
                         )
-                    elif len(divs_posibles) == 1:
-                        division_seleccionada = divs_posibles[0]
-
-        else:
-            if "Materia - Docente" in df_padron.columns:
-                comisiones_todas = sorted(df_padron["Materia - Docente"].astype(str).str.strip().unique().tolist())
-                comision_mat = st.selectbox("Seleccione Materia / Grupo:", comisiones_todas, key="sel_mat_todas")
-                if comision_mat:
-                    comision_seleccionada = comision_mat
-                    df_sub_mat = df_padron[df_padron["Materia - Docente"] == comision_mat]
-                    docente_actual = df_sub_mat["Docente"].values[0] if "Docente" in df_sub_mat.columns and not df_sub_mat.empty else ""
-
-                    divs_posibles_mat = sorted(df_sub_mat["Division"].astype(str).str.strip().unique().tolist()) if "Division" in df_sub_mat.columns else []
-
-                    if len(divs_posibles_mat) > 1:
-                        division_seleccionada = st.selectbox(
-                            "Seleccione Curso / División:",
-                            ["-- Seleccionar Curso --"] + divs_posibles_mat + ["Todas"],
-                            key="sel_div_mat"
-                        )
-                    elif len(divs_posibles_mat) == 1:
-                        division_seleccionada = divs_posibles_mat[0]
 
 # -------------------------------------------------------------------
 # VISTA EN DOS COLUMNAS (PRESENTES Y AUSENTES/RETIRADOS)
 # -------------------------------------------------------------------
 if comision_seleccionada:
     if division_seleccionada == "-- Seleccionar Curso --":
-        st.info("👉 Por favor seleccione el **Curso / División** en el menú desplegable superior para cargar la lista de alumnos.")
+        st.info("👉 Por favor seleccione el **3. Curso / División** arriba para cargar únicamente la lista correspondiente de alumnos.")
     else:
         st.divider()
         col_hdr1, col_hdr2 = st.columns([3, 1])
         with col_hdr1:
             st.subheader("📋 Alumnos esperados en aula")
-            div_label = f" | Curso: **{division_seleccionada}**" if division_seleccionada != "Todas" else " | Curso: **Todos**"
+            div_label = f" | Curso: **{division_seleccionada}**" if division_seleccionada != "Todas las divisiones" else " | Curso: **Todos los cursos**"
             st.caption(f"Comisión: **{comision_seleccionada}**{div_label} | Fecha: **{fecha_hoy}**")
         with col_hdr2:
             if st.button("🔄 Actualizar Datos", help="Haga clic para sincronizar las novedades más recientes del colegio"):
