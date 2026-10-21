@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import unicodedata
 import smtplib
 from email.mime.text import MIMEText
@@ -11,13 +11,19 @@ import os
 import re
 
 # -------------------------------------------------------------------
-# CONFIGURACIÓN DE PÁGINA
+# CONFIGURACIÓN DE PÁGINA Y ZONA HORARIA
 # -------------------------------------------------------------------
 st.set_page_config(
     page_title="Control de Asistencia",
     page_icon="🏫",
     layout="wide"
 )
+
+# ZONA HORARIA ARGENTINA (UTC-3)
+TZ_ARG = timezone(timedelta(hours=-3))
+
+def obtener_ahora():
+    return datetime.now(TZ_ARG)
 
 # HORARIOS DE INICIO DE CADA BLOQUE
 BLOQUES_HORARIOS_INICIO = {
@@ -205,7 +211,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada):
         df_grupo["InfoRetiro"] = ""
         df_grupo["_alum_norm"] = df_grupo["Alumno"].apply(normalizar_texto)
 
-        hoy_dt = datetime.now()
+        hoy_dt = obtener_ahora()
         hora_actual_str = hoy_dt.strftime("%H:%M")
         fecha_buscar_1 = f"{hoy_dt.day}/{hoy_dt.month}"
         fecha_buscar_2 = hoy_dt.strftime("%d/%m")
@@ -282,7 +288,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada):
                             hora_ini = info_det["hora_inicio"]
                             num_b = info_det["bloque"]
                             
-                            # Si la hora actual es anterior al horario de salida, sigue en clase
+                            # Comparación exacta con hora Argentina
                             if hora_actual_str < hora_ini:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoRetiro"] = f"🚪 (Retiro prog.: Bloque {num_b} - {hora_ini} hs)"
@@ -316,7 +322,7 @@ if logo_encontrado:
 else:
     st.title("🏫 Control de Asistencia en Aula")
 
-hoy_dt = datetime.now()
+hoy_dt = obtener_ahora()
 fecha_hoy = hoy_dt.strftime("%d/%m/%Y")
 hora_actual = hoy_dt.strftime("%H:%M")
 
