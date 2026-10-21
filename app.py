@@ -8,6 +8,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import os
+import re
 
 # -------------------------------------------------------------------
 # CONFIGURACIÓN DE PÁGINA
@@ -17,6 +18,27 @@ st.set_page_config(
     page_icon="🏫",
     layout="wide"
 )
+
+# HORARIOS DE INICIO DE CADA BLOQUE
+BLOQUES_HORARIOS_INICIO = {
+    1: "07:40",
+    2: "09:10",
+    3: "10:45",
+    4: "12:15",
+    5: "12:55",
+    6: "13:45",
+    7: "15:10"
+}
+
+def obtener_hora_inicio_bloque(bloque_val):
+    try:
+        match = re.search(r'\d+', str(bloque_val))
+        if match:
+            num_bloque = int(match.group())
+            return BLOQUES_HORARIOS_INICIO.get(num_bloque, None), num_bloque
+    except Exception:
+        pass
+    return None, None
 
 # -------------------------------------------------------------------
 # FUNCIONES DE NORMALIZACIÓN Y AYUDA
@@ -168,7 +190,7 @@ def registrar_fuga(ausentes, comision, docente, fecha, hora):
         return False
 
 # -------------------------------------------------------------------
-# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA DIARIA
+# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA CON CONTROL DE BLOQUES DE RETIRO
 # -------------------------------------------------------------------
 def obtener_alumnos_esperados(df_padron, comision_seleccionada):
     try:
@@ -180,9 +202,11 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada):
             return pd.DataFrame()
 
         df_grupo["Estado"] = "Presente"
+        df_grupo["InfoRetiro"] = ""
         df_grupo["_alum_norm"] = df_grupo["Alumno"].apply(normalizar_texto)
 
         hoy_dt = datetime.now()
+        hora_actual_str = hoy_dt.strftime("%H:%M")
         fecha_buscar_1 = f"{hoy_dt.day}/{hoy_dt.month}"
         fecha_buscar_2 = hoy_dt.strftime("%d/%m")
         fecha_buscar_3 = hoy_dt.strftime("%d/%m/%Y")
@@ -205,6 +229,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada):
 
             headers = [str(h).strip() for h in values[0]]
             
+            # Buscar columna de la fecha
             col_idx = -1
             for idx, h in enumerate(headers):
                 h_norm = h.replace(" ", "")
@@ -212,15 +237,58 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada):
                     col_idx = idx
                     break
 
-            if col_idx != -1:
+            # Buscar columnas del detalle de retiro (FF:FI / Alumno detalle, Fecha detalle, Bloque salida)
+            col_alum_det = -1
+            col_fecha_det = -1
+            col_salida_det = -1
+
+            for idx, h in enumerate(headers):
+                h_norm = normalizar_texto(h)
+                if "alumno" in h_norm and "deta" in h_norm:
+                    col_alum_det = idx
+                elif "fecha" in h_norm and "deta" in h_norm:
+                    col_fecha_det = idx
+                elif "bloque" in h_norm and "salida" in h_norm:
+                    col_salida_det = idx
+
+            detalles_retiro = {}
+            if col_alum_det != -1 and col_salida_det != -1:
                 for row in values[1:]:
-                    if len(row) > col_idx:
-                        nombre_alum_hoja = normalizar_texto(row[0])
-                        val_asistencia = str(row[col_idx]).strip().upper()
+                    if len(row) > max(col_alum_det, col_salida_det):
+                        nombre_det = normalizar_texto(row[col_alum_det])
+                        fecha_det = str(row[col_fecha_det]).strip() if col_fecha_det != -1 and len(row) > col_fecha_det else ""
+                        bloque_val = row[col_salida_det]
                         
-                        if val_asistencia in ["A", "AUSENTE"] or val_asistencia.startswith("A "):
-                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
-                        elif val_asistencia in ["R", "RETIRO", "RETIRADO"] or val_asistencia.startswith("R "):
+                        if not fecha_det or fecha_buscar_1 in fecha_det or fecha_buscar_2 in fecha_det or fecha_buscar_3 in fecha_det:
+                            hora_ini, num_b = obtener_hora_inicio_bloque(bloque_val)
+                            if num_b and hora_ini:
+                                detalles_retiro[nombre_det] = {
+                                    "bloque": num_b,
+                                    "hora_inicio": hora_ini
+                                }
+
+            # Evaluar inasistencias y retiros
+            for row in values[1:]:
+                if len(row) > 0:
+                    nombre_alum_hoja = normalizar_texto(row[0])
+                    val_asistencia = str(row[col_idx]).strip().upper() if col_idx != -1 and len(row) > col_idx else ""
+                    
+                    if val_asistencia in ["A", "AUSENTE"] or val_asistencia.startswith("A "):
+                        df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
+                    
+                    elif val_asistencia in ["R", "RETIRO", "RETIRADO"] or val_asistencia.startswith("R ") or nombre_alum_hoja in detalles_retiro:
+                        if nombre_alum_hoja in detalles_retiro:
+                            info_det = detalles_retiro[nombre_alum_hoja]
+                            hora_ini = info_det["hora_inicio"]
+                            num_b = info_det["bloque"]
+                            
+                            # Si la hora actual es anterior al horario de salida, sigue en clase
+                            if hora_actual_str < hora_ini:
+                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
+                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoRetiro"] = f"🚪 (Retiro prog.: Bloque {num_b} - {hora_ini} hs)"
+                            else:
+                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
+                        else:
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
 
         return df_grupo
@@ -247,7 +315,6 @@ if logo_encontrado:
         st.title("Control de Asistencia en Aula")
 else:
     st.title("🏫 Control de Asistencia en Aula")
-    st.info("💡 Para mostrar el logo del colegio, subí una imagen llamada `logo.png` a la carpeta principal de tu GitHub.")
 
 hoy_dt = datetime.now()
 fecha_hoy = hoy_dt.strftime("%d/%m/%Y")
@@ -325,10 +392,12 @@ if comision_seleccionada:
                 if est in ["ausente", "retirado"]:
                     continue
                 
+                info_ret = str(row.get("InfoRetiro", "")).strip()
                 nombre_alumno = f"{row['Alumno']} ({row['Division']})"
+                label_check = f"{nombre_alumno} {info_ret}" if info_ret else nombre_alumno
                 
                 esta_presente = st.checkbox(
-                    nombre_alumno, 
+                    label_check, 
                     value=True, 
                     key=f"check_{index}_{row['Alumno']}"
                 )
