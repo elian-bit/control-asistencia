@@ -196,7 +196,7 @@ def registrar_fuga(ausentes, comision, docente, fecha, hora):
         return False
 
 # -------------------------------------------------------------------
-# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA CON FILTRO DE DIVISIÓN Y BLOQUES
+# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA CON FILTRO EXCLUSIVO DE DIVISIÓN
 # -------------------------------------------------------------------
 def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_seleccionada="Todas"):
     try:
@@ -207,9 +207,10 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
         if df_grupo.empty:
             return pd.DataFrame()
 
-        # Filtro específico por División/Curso si no es "Todas"
-        if division_seleccionada and division_seleccionada != "Todas":
-            df_grupo = df_grupo[df_grupo["Division"].astype(str).str.strip() == str(division_seleccionada).strip()]
+        # Filtro estricto y normalizado por división
+        if division_seleccionada and division_seleccionada not in ["Todas", "-- Seleccionar Curso --"]:
+            div_target_norm = normalizar_texto(division_seleccionada)
+            df_grupo = df_grupo[df_grupo["Division"].apply(lambda x: normalizar_texto(str(x)) == div_target_norm)]
 
         if df_grupo.empty:
             return pd.DataFrame()
@@ -341,44 +342,50 @@ if sh:
     df_padron = cargar_padron()
     
     if not df_padron.empty:
-        tab1, tab2 = st.tabs(["👤 Buscar por Docente", "📚 Buscar por Materia"])
+        modo_busqueda = st.radio("Buscar por:", ["👤 Docente", "📚 Materia"], horizontal=True)
         
-        with tab1:
+        if modo_busqueda == "👤 Docente":
             if "Docente" in df_padron.columns:
                 docentes = sorted(df_padron["Docente"].astype(str).str.strip().unique().tolist())
                 docente_sel = st.selectbox("Seleccione Docente:", docentes, key="sel_docente")
                 
                 df_docente = df_padron[df_padron["Docente"].astype(str).str.strip() == docente_sel]
-                materias_docente = df_docente["Materia - Docente"].unique().tolist()
+                materias_docente = sorted(df_docente["Materia - Docente"].unique().tolist())
                 
                 comision_docente = st.selectbox("Seleccione Materia / Grupo:", materias_docente, key="sel_mat_doc")
                 if comision_docente:
                     comision_seleccionada = comision_docente
                     docente_actual = docente_sel
 
-                    # Obtener divisiones disponibles para este docente y materia
                     df_sub = df_docente[df_docente["Materia - Docente"] == comision_docente]
                     divs_posibles = sorted(df_sub["Division"].astype(str).str.strip().unique().tolist()) if "Division" in df_sub.columns else []
 
                     if len(divs_posibles) > 1:
-                        division_seleccionada = st.selectbox("Seleccione División / Curso:", ["Todas"] + divs_posibles, key="sel_div_doc")
+                        division_seleccionada = st.selectbox(
+                            "Seleccione Curso / División:",
+                            ["-- Seleccionar Curso --"] + divs_posibles + ["Todas"],
+                            key="sel_div_doc"
+                        )
                     elif len(divs_posibles) == 1:
                         division_seleccionada = divs_posibles[0]
 
-        with tab2:
+        else:
             if "Materia - Docente" in df_padron.columns:
                 comisiones_todas = sorted(df_padron["Materia - Docente"].astype(str).str.strip().unique().tolist())
                 comision_mat = st.selectbox("Seleccione Materia / Grupo:", comisiones_todas, key="sel_mat_todas")
-                if comision_mat and not comision_seleccionada:
+                if comision_mat:
                     comision_seleccionada = comision_mat
                     df_sub_mat = df_padron[df_padron["Materia - Docente"] == comision_mat]
-                    docente_actual = df_sub_mat["Docente"].values[0] if "Docente" in df_sub_mat.columns else ""
+                    docente_actual = df_sub_mat["Docente"].values[0] if "Docente" in df_sub_mat.columns and not df_sub_mat.empty else ""
 
-                    # Obtener divisiones disponibles para esta materia
                     divs_posibles_mat = sorted(df_sub_mat["Division"].astype(str).str.strip().unique().tolist()) if "Division" in df_sub_mat.columns else []
 
                     if len(divs_posibles_mat) > 1:
-                        division_seleccionada = st.selectbox("Seleccione División / Curso:", ["Todas"] + divs_posibles_mat, key="sel_div_mat")
+                        division_seleccionada = st.selectbox(
+                            "Seleccione Curso / División:",
+                            ["-- Seleccionar Curso --"] + divs_posibles_mat + ["Todas"],
+                            key="sel_div_mat"
+                        )
                     elif len(divs_posibles_mat) == 1:
                         division_seleccionada = divs_posibles_mat[0]
 
@@ -386,90 +393,93 @@ if sh:
 # VISTA EN DOS COLUMNAS (PRESENTES Y AUSENTES/RETIRADOS)
 # -------------------------------------------------------------------
 if comision_seleccionada:
-    st.divider()
-    col_hdr1, col_hdr2 = st.columns([3, 1])
-    with col_hdr1:
-        st.subheader("📋 Alumnos esperados en aula")
-        div_label = f" | Curso: **{division_seleccionada}**" if division_seleccionada != "Todas" else " | Curso: **Todos**"
-        st.caption(f"Comisión: **{comision_seleccionada}**{div_label} | Fecha: **{fecha_hoy}**")
-    with col_hdr2:
-        if st.button("🔄 Actualizar Datos", help="Haga clic para sincronizar las novedades más recientes del colegio"):
-            st.rerun()
-
-    df_esperados = obtener_alumnos_esperados(df_padron, comision_seleccionada, division_seleccionada)
-
-    if df_esperados.empty:
-        st.info("No se encontraron alumnos para este filtro en Padron_Comisiones.")
+    if division_seleccionada == "-- Seleccionar Curso --":
+        st.info("👉 Por favor seleccione el **Curso / División** en el menú desplegable superior para cargar la lista de alumnos.")
     else:
-        col_presentes, col_ausentes = st.columns(2)
+        st.divider()
+        col_hdr1, col_hdr2 = st.columns([3, 1])
+        with col_hdr1:
+            st.subheader("📋 Alumnos esperados en aula")
+            div_label = f" | Curso: **{division_seleccionada}**" if division_seleccionada != "Todas" else " | Curso: **Todos**"
+            st.caption(f"Comisión: **{comision_seleccionada}**{div_label} | Fecha: **{fecha_hoy}**")
+        with col_hdr2:
+            if st.button("🔄 Actualizar Datos", help="Haga clic para sincronizar las novedades más recientes del colegio"):
+                st.rerun()
 
-        ausentes_en_aula = []
-        ausentes_colegio = []
-        retirados_colegio = []
-        presentes_en_aula = []
+        df_esperados = obtener_alumnos_esperados(df_padron, comision_seleccionada, division_seleccionada)
 
-        for index, row in df_esperados.iterrows():
-            est = str(row.get("Estado", "")).strip().lower()
-            if est == "ausente":
-                ausentes_colegio.append(f"{row['Alumno']} ({row['Division']})")
-            elif est == "retirado":
-                retirados_colegio.append(f"{row['Alumno']} ({row['Division']})")
+        if df_esperados.empty:
+            st.info("No se encontraron alumnos para este filtro en Padron_Comisiones.")
+        else:
+            col_presentes, col_ausentes = st.columns(2)
 
-        # COLUMNA IZQUIERDA: Presentes en Aula
-        with col_presentes:
-            st.subheader("✅ Presentes en Aula")
-            st.caption("Desmarque a quienes NO estén en la clase")
-            
+            ausentes_en_aula = []
+            ausentes_colegio = []
+            retirados_colegio = []
+            presentes_en_aula = []
+
             for index, row in df_esperados.iterrows():
                 est = str(row.get("Estado", "")).strip().lower()
-                if est in ["ausente", "retirado"]:
-                    continue
+                if est == "ausente":
+                    ausentes_colegio.append(f"{row['Alumno']} ({row['Division']})")
+                elif est == "retirado":
+                    retirados_colegio.append(f"{row['Alumno']} ({row['Division']})")
+
+            # COLUMNA IZQUIERDA: Presentes en Aula
+            with col_presentes:
+                st.subheader("✅ Presentes en Aula")
+                st.caption("Desmarque a quienes NO estén en la clase")
                 
-                info_ret = str(row.get("InfoRetiro", "")).strip()
-                nombre_alumno = f"{row['Alumno']} ({row['Division']})"
-                label_check = f"{nombre_alumno} {info_ret}" if info_ret else nombre_alumno
+                for index, row in df_esperados.iterrows():
+                    est = str(row.get("Estado", "")).strip().lower()
+                    if est in ["ausente", "retirado"]:
+                        continue
+                    
+                    info_ret = str(row.get("InfoRetiro", "")).strip()
+                    nombre_alumno = f"{row['Alumno']} ({row['Division']})"
+                    label_check = f"{nombre_alumno} {info_ret}" if info_ret else nombre_alumno
+                    
+                    esta_presente = st.checkbox(
+                        label_check, 
+                        value=True, 
+                        key=f"check_{index}_{row['Alumno']}"
+                    )
+                    
+                    if esta_presente:
+                        presentes_en_aula.append(row['Alumno'])
+                    else:
+                        ausentes_en_aula.append(row['Alumno'])
+
+            # COLUMNA DERECHA: Ausentes y Retirados
+            with col_ausentes:
+                st.subheader("❌ Ausentes / Retiros anticipados")
+                st.caption("Alumnos fuera del aula o del colegio")
                 
-                esta_presente = st.checkbox(
-                    label_check, 
-                    value=True, 
-                    key=f"check_{index}_{row['Alumno']}"
-                )
+                if ausentes_colegio:
+                    st.markdown("**🏠 Ausentes en el Colegio (Planilla Diaria):**")
+                    for alum in ausentes_colegio:
+                        st.warning(f"• {alum}")
                 
-                if esta_presente:
-                    presentes_en_aula.append(row['Alumno'])
+                if retirados_colegio:
+                    st.markdown("**🚪 Retirados del Colegio:**")
+                    for alum in retirados_colegio:
+                        st.warning(f"• {alum} *(Retirado)*")
+                
+                if ausentes_en_aula:
+                    st.markdown("**🚨 Ausentes en Aula / Retiro anticipado:**")
+                    for ausente in ausentes_en_aula:
+                        st.error(f"⚠️ {ausente}")
+                
+                if not ausentes_colegio and not retirados_colegio and not ausentes_en_aula:
+                    st.success("Todos los alumnos de esta comisión están presentes en la clase.")
+
+            st.divider()
+            
+            # BOTÓN DE CONFIRMACIÓN
+            if st.button("🚨 Confirmar Asistencia / Reportar Ausentes", type="primary"):
+                if ausentes_en_aula:
+                    exito = registrar_fuga(ausentes_en_aula, comision_seleccionada, docente_actual, fecha_hoy, hora_actual)
+                    if exito:
+                        st.error(f"⚠️ Alerta registrada y enviada por mail para {len(ausentes_en_aula)} alumno(s) ausente(s) en aula.")
                 else:
-                    ausentes_en_aula.append(row['Alumno'])
-
-        # COLUMNA DERECHA: Ausentes y Retirados
-        with col_ausentes:
-            st.subheader("❌ Ausentes / Retiros anticipados")
-            st.caption("Alumnos fuera del aula o del colegio")
-            
-            if ausentes_colegio:
-                st.markdown("**🏠 Ausentes en el Colegio (Planilla Diaria):**")
-                for alum in ausentes_colegio:
-                    st.warning(f"• {alum}")
-            
-            if retirados_colegio:
-                st.markdown("**🚪 Retirados del Colegio:**")
-                for alum in retirados_colegio:
-                    st.warning(f"• {alum} *(Retirado)*")
-            
-            if ausentes_en_aula:
-                st.markdown("**🚨 Ausentes en Aula / Retiro anticipado:**")
-                for ausente in ausentes_en_aula:
-                    st.error(f"⚠️ {ausente}")
-            
-            if not ausentes_colegio and not retirados_colegio and not ausentes_en_aula:
-                st.success("Todos los alumnos de esta comisión están presentes en la clase.")
-
-        st.divider()
-        
-        # BOTÓN DE CONFIRMACIÓN
-        if st.button("🚨 Confirmar Asistencia / Reportar Ausentes", type="primary"):
-            if ausentes_en_aula:
-                exito = registrar_fuga(ausentes_en_aula, comision_seleccionada, docente_actual, fecha_hoy, hora_actual)
-                if exito:
-                    st.error(f"⚠️ Alerta registrada y enviada por mail para {len(ausentes_en_aula)} alumno(s) ausente(s) en aula.")
-            else:
-                st.success("✅ Asistencia confirmada.")
+                    st.success("✅ Asistencia confirmada.")
