@@ -57,6 +57,14 @@ def normalizar_texto(texto):
     texto = texto.replace(',', ' ').replace('-', ' ').replace('_', ' ')
     return " ".join(texto.split())
 
+def normalizar_division(div):
+    if not div or pd.isna(div):
+        return ""
+    d = str(div).strip().upper()
+    # Elimina caracteres especiales y espacios (ej. "4°A", "4 A", "4-A" -> "4A")
+    d = re.sub(r'[^A-Z0-9]', '', d)
+    return d
+
 # -------------------------------------------------------------------
 # CONEXIÓN A GOOGLE SHEETS
 # -------------------------------------------------------------------
@@ -107,6 +115,12 @@ def cargar_padron():
             if "Materia" in df_padron.columns and "Docente" in df_padron.columns:
                 df_padron["Materia - Docente"] = df_padron["Materia"].astype(str).str.strip() + " - " + df_padron["Docente"].astype(str).str.strip()
         
+        # Unificación de formato de División
+        if "Division" in df_padron.columns:
+            df_padron["Division_Clean"] = df_padron["Division"].apply(normalizar_division)
+        else:
+            df_padron["Division_Clean"] = ""
+
         return df_padron
     except Exception as e:
         st.error(f"Error al cargar Padron_Comisiones: {e}")
@@ -205,10 +219,10 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
         if df_grupo.empty:
             return pd.DataFrame()
 
-        # Filtrar estrictamente por División si no se eligió "Todas las divisiones"
+        # Filtrar estrictamente por División normalizada
         if division_seleccionada and division_seleccionada not in ["Todas las divisiones", "-- Seleccionar Curso --"]:
-            div_norm_target = normalizar_texto(division_seleccionada)
-            df_grupo = df_grupo[df_grupo["Division"].apply(lambda x: normalizar_texto(str(x)) == div_norm_target)]
+            div_norm_target = normalizar_division(division_seleccionada)
+            df_grupo = df_grupo[df_grupo["Division_Clean"] == div_norm_target]
 
         if df_grupo.empty:
             return pd.DataFrame()
@@ -223,7 +237,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
         fecha_buscar_2 = hoy_dt.strftime("%d/%m")
         fecha_buscar_3 = hoy_dt.strftime("%d/%m/%Y")
 
-        divisiones = df_grupo["Division"].unique() if "Division" in df_grupo.columns else []
+        divisiones = df_grupo["Division_Clean"].unique() if "Division_Clean" in df_grupo.columns else []
         
         for div in divisiones:
             div_str = str(div).strip()
@@ -354,9 +368,9 @@ if sh:
                 comision_seleccionada = comision_docente
                 
                 df_sub = df_docente[df_docente["Materia - Docente"] == comision_docente]
-                divs_posibles = sorted([str(d).strip() for d in df_sub["Division"].dropna().unique() if str(d).strip()]) if "Division" in df_sub.columns else []
+                divs_posibles = sorted([d for d in df_sub["Division_Clean"].unique() if d])
                 
-                # Si la materia / docente tiene MÁS DE UN CURSO, muestra el 3er desplegable
+                # Si tiene MÁS DE UN CURSO REAL, muestra el 3er desplegable
                 if len(divs_posibles) > 1:
                     with col_filtro3:
                         division_seleccionada = st.selectbox(
@@ -364,7 +378,7 @@ if sh:
                             ["-- Seleccionar Curso --"] + divs_posibles + ["Todas las divisiones"],
                             key="sel_div_main"
                         )
-                # Si solo tiene UN CURSO, lo asigna automáticamente sin mostrar el desplegable
+                # Si solo tiene UN CURSO, se asigna automáticamente y NO MUESTRA desplegable
                 elif len(divs_posibles) == 1:
                     division_seleccionada = divs_posibles[0]
                 else:
