@@ -7,13 +7,14 @@ import unicodedata
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import os
 
 # -------------------------------------------------------------------
 # CONFIGURACIÓN DE PÁGINA
 # -------------------------------------------------------------------
 st.set_page_config(
     page_title="Control de Asistencia",
-    page_icon="logo.png",  # Utiliza el logo como icono de pestaña del navegador
+    page_icon="🏫",
     layout="wide"
 )
 
@@ -228,16 +229,25 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada):
         return pd.DataFrame()
 
 # -------------------------------------------------------------------
-# ENCABEZADO CON LOGO Y TÍTULO ALINEADOS
+# DETECCIÓN DE LOGO Y ENCABEZADO
 # -------------------------------------------------------------------
-col_logo, col_titulo = st.columns([0.8, 9.2], vertical_alignment="center")
-with col_logo:
-    try:
-        st.image("logo.png", width=55)
-    except Exception:
-        st.text("🏫")
-with col_titulo:
-    st.title("Control de Asistencia en Aula")
+logo_encontrado = None
+posibles_nombres = ["logo.png", "logo.PNG", "logo.jpg", "logo.jpeg", "Logo.png", "Logo.PNG"]
+
+for nombre in posibles_nombres:
+    if os.path.exists(nombre):
+        logo_encontrado = nombre
+        break
+
+if logo_encontrado:
+    col_logo, col_titulo = st.columns([0.8, 9.2], vertical_alignment="center")
+    with col_logo:
+        st.image(logo_encontrado, width=65)
+    with col_titulo:
+        st.title("Control de Asistencia en Aula")
+else:
+    st.title("🏫 Control de Asistencia en Aula")
+    st.info("💡 Para mostrar el logo del colegio, subí una imagen llamada `logo.png` a la carpeta principal de tu GitHub.")
 
 hoy_dt = datetime.now()
 fecha_hoy = hoy_dt.strftime("%d/%m/%Y")
