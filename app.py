@@ -329,7 +329,7 @@ fecha_hoy = hoy_dt.strftime("%d/%m/%Y")
 hora_actual = hoy_dt.strftime("%H:%M")
 
 comision_seleccionada = None
-division_seleccionada = "-- Seleccionar Curso --"
+division_seleccionada = None
 docente_actual = ""
 
 if sh:
@@ -349,18 +349,26 @@ if sh:
             
             with col_filtro2:
                 comision_docente = st.selectbox("2. Seleccione Materia / Grupo:", ["-- Seleccionar Materia --"] + materias_docente, key="sel_mat_main")
-                if comision_docente and comision_docente != "-- Seleccionar Materia --":
-                    comision_seleccionada = comision_docente
-                    
-                    df_sub = df_docente[df_docente["Materia - Docente"] == comision_docente]
-                    divs_posibles = sorted(df_sub["Division"].astype(str).str.strip().unique().tolist()) if "Division" in df_sub.columns else []
-                    
+                
+            if comision_docente and comision_docente != "-- Seleccionar Materia --":
+                comision_seleccionada = comision_docente
+                
+                df_sub = df_docente[df_docente["Materia - Docente"] == comision_docente]
+                divs_posibles = sorted([str(d).strip() for d in df_sub["Division"].dropna().unique() if str(d).strip()]) if "Division" in df_sub.columns else []
+                
+                # Si la materia / docente tiene MÁS DE UN CURSO, muestra el 3er desplegable
+                if len(divs_posibles) > 1:
                     with col_filtro3:
                         division_seleccionada = st.selectbox(
                             "3. Seleccione Curso / División:",
                             ["-- Seleccionar Curso --"] + divs_posibles + ["Todas las divisiones"],
                             key="sel_div_main"
                         )
+                # Si solo tiene UN CURSO, lo asigna automáticamente sin mostrar el desplegable
+                elif len(divs_posibles) == 1:
+                    division_seleccionada = divs_posibles[0]
+                else:
+                    division_seleccionada = "Todas las divisiones"
 
 # -------------------------------------------------------------------
 # VISTA EN DOS COLUMNAS (PRESENTES Y AUSENTES/RETIRADOS)
@@ -368,7 +376,7 @@ if sh:
 if comision_seleccionada:
     if division_seleccionada == "-- Seleccionar Curso --":
         st.info("👉 Por favor seleccione el **3. Curso / División** arriba para cargar únicamente la lista correspondiente de alumnos.")
-    else:
+    elif division_seleccionada:
         st.divider()
         col_hdr1, col_hdr2 = st.columns([3, 1])
         with col_hdr1:
