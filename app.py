@@ -196,14 +196,21 @@ def registrar_fuga(ausentes, comision, docente, fecha, hora):
         return False
 
 # -------------------------------------------------------------------
-# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA CON CONTROL DE BLOQUES DE RETIRO
+# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA CON FILTRO DE DIVISIÓN Y BLOQUES
 # -------------------------------------------------------------------
-def obtener_alumnos_esperados(df_padron, comision_seleccionada):
+def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_seleccionada="Todas"):
     try:
         com_norm = normalizar_texto(comision_seleccionada)
         df_padron["_com_norm"] = df_padron["Materia - Docente"].apply(normalizar_texto)
         df_grupo = df_padron[df_padron["_com_norm"] == com_norm].copy()
         
+        if df_grupo.empty:
+            return pd.DataFrame()
+
+        # Filtro específico por División/Curso si no es "Todas"
+        if division_seleccionada and division_seleccionada != "Todas":
+            df_grupo = df_grupo[df_grupo["Division"].astype(str).str.strip() == str(division_seleccionada).strip()]
+
         if df_grupo.empty:
             return pd.DataFrame()
 
@@ -327,6 +334,7 @@ fecha_hoy = hoy_dt.strftime("%d/%m/%Y")
 hora_actual = hoy_dt.strftime("%H:%M")
 
 comision_seleccionada = None
+division_seleccionada = "Todas"
 docente_actual = ""
 
 if sh:
@@ -348,13 +356,31 @@ if sh:
                     comision_seleccionada = comision_docente
                     docente_actual = docente_sel
 
+                    # Obtener divisiones disponibles para este docente y materia
+                    df_sub = df_docente[df_docente["Materia - Docente"] == comision_docente]
+                    divs_posibles = sorted(df_sub["Division"].astype(str).str.strip().unique().tolist()) if "Division" in df_sub.columns else []
+
+                    if len(divs_posibles) > 1:
+                        division_seleccionada = st.selectbox("Seleccione División / Curso:", ["Todas"] + divs_posibles, key="sel_div_doc")
+                    elif len(divs_posibles) == 1:
+                        division_seleccionada = divs_posibles[0]
+
         with tab2:
             if "Materia - Docente" in df_padron.columns:
                 comisiones_todas = sorted(df_padron["Materia - Docente"].astype(str).str.strip().unique().tolist())
                 comision_mat = st.selectbox("Seleccione Materia / Grupo:", comisiones_todas, key="sel_mat_todas")
                 if comision_mat and not comision_seleccionada:
                     comision_seleccionada = comision_mat
-                    docente_actual = df_padron[df_padron["Materia - Docente"] == comision_mat]["Docente"].values[0]
+                    df_sub_mat = df_padron[df_padron["Materia - Docente"] == comision_mat]
+                    docente_actual = df_sub_mat["Docente"].values[0] if "Docente" in df_sub_mat.columns else ""
+
+                    # Obtener divisiones disponibles para esta materia
+                    divs_posibles_mat = sorted(df_sub_mat["Division"].astype(str).str.strip().unique().tolist()) if "Division" in df_sub_mat.columns else []
+
+                    if len(divs_posibles_mat) > 1:
+                        division_seleccionada = st.selectbox("Seleccione División / Curso:", ["Todas"] + divs_posibles_mat, key="sel_div_mat")
+                    elif len(divs_posibles_mat) == 1:
+                        division_seleccionada = divs_posibles_mat[0]
 
 # -------------------------------------------------------------------
 # VISTA EN DOS COLUMNAS (PRESENTES Y AUSENTES/RETIRADOS)
@@ -364,15 +390,16 @@ if comision_seleccionada:
     col_hdr1, col_hdr2 = st.columns([3, 1])
     with col_hdr1:
         st.subheader("📋 Alumnos esperados en aula")
-        st.caption(f"Comisión: **{comision_seleccionada}** | Fecha: **{fecha_hoy}**")
+        div_label = f" | Curso: **{division_seleccionada}**" if division_seleccionada != "Todas" else " | Curso: **Todos**"
+        st.caption(f"Comisión: **{comision_seleccionada}**{div_label} | Fecha: **{fecha_hoy}**")
     with col_hdr2:
         if st.button("🔄 Actualizar Datos", help="Haga clic para sincronizar las novedades más recientes del colegio"):
             st.rerun()
 
-    df_esperados = obtener_alumnos_esperados(df_padron, comision_seleccionada)
+    df_esperados = obtener_alumnos_esperados(df_padron, comision_seleccionada, division_seleccionada)
 
     if df_esperados.empty:
-        st.info("No se encontraron alumnos para esta comisión en Padron_Comisiones.")
+        st.info("No se encontraron alumnos para este filtro en Padron_Comisiones.")
     else:
         col_presentes, col_ausentes = st.columns(2)
 
