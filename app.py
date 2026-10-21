@@ -13,7 +13,7 @@ from email.mime.multipart import MIMEMultipart
 # -------------------------------------------------------------------
 st.set_page_config(
     page_title="Control de Asistencia",
-    page_icon="🏫",
+    page_icon="logo.png",  # Utiliza el logo como icono de pestaña del navegador
     layout="wide"
 )
 
@@ -103,7 +103,7 @@ def buscar_hoja_asistencia(sh, letra_div):
     return None
 
 # -------------------------------------------------------------------
-# ENVÍO DE EMAIL DE ALERTA (SOLO A ELIAN@BUBER.EDU.AR)
+# ENVÍO DE EMAIL DE ALERTA (A ELIAN@BUBER.EDU.AR)
 # -------------------------------------------------------------------
 def enviar_email_alerta(ausentes, comision, docente, fecha, hora):
     try:
@@ -228,9 +228,16 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada):
         return pd.DataFrame()
 
 # -------------------------------------------------------------------
-# INTERFAZ PRINCIPAL Y SELECCIÓN DE COMISIÓN
+# ENCABEZADO CON LOGO Y TÍTULO ALINEADOS
 # -------------------------------------------------------------------
-st.title("🏫 Control de Asistencia en Aula")
+col_logo, col_titulo = st.columns([0.8, 9.2], vertical_alignment="center")
+with col_logo:
+    try:
+        st.image("logo.png", width=55)
+    except Exception:
+        st.text("🏫")
+with col_titulo:
+    st.title("Control de Asistencia en Aula")
 
 hoy_dt = datetime.now()
 fecha_hoy = hoy_dt.strftime("%d/%m/%Y")
