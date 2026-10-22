@@ -188,7 +188,7 @@ Mensaje enviado automáticamente por la App de Control de Asistencia.
         st.warning(f"No se pudo enviar la notificación por mail: {e}")
 
 # -------------------------------------------------------------------
-# FUNCIÓN REGISTRAR RETIRO
+# FUNCIÓN REGISTRAR RETIRO / AUSENCIA
 # -------------------------------------------------------------------
 def registrar_fuga(ausentes, comision, docente, fecha, hora):
     try:
@@ -206,7 +206,7 @@ def registrar_fuga(ausentes, comision, docente, fecha, hora):
         return False
 
 # -------------------------------------------------------------------
-# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA CON FILTRO EXCLUSIVO DE DIVISIÓN
+# FUNCIÓN OBTENER ALUMNOS Y ASISTENCIA CON CONTROL DE ENTRADA Y SALIDA
 # -------------------------------------------------------------------
 def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_seleccionada):
     try:
@@ -217,7 +217,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
         if df_grupo.empty:
             return pd.DataFrame()
 
-        # Filtrar por división si se especificó una distinta a "Todas las divisiones"
+        # Filtrar por división
         if division_seleccionada and division_seleccionada not in ["Todas las divisiones", "-- Seleccionar Curso --"]:
             div_norm_target = normalizar_division(division_seleccionada)
             df_grupo = df_grupo[df_grupo["Division_Clean"] == div_norm_target]
@@ -226,7 +226,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
             return pd.DataFrame()
 
         df_grupo["Estado"] = "Presente"
-        df_grupo["InfoRetiro"] = ""
+        df_grupo["InfoNota"] = ""
         df_grupo["_alum_norm"] = df_grupo["Alumno"].apply(normalizar_texto)
 
         hoy_dt = obtener_ahora()
@@ -253,6 +253,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
 
             headers = [str(h).strip() for h in values[0]]
             
+            # Buscar columna de fecha
             col_idx = -1
             for idx, h in enumerate(headers):
                 h_norm = h.replace(" ", "")
@@ -260,8 +261,10 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                     col_idx = idx
                     break
 
+            # Buscar columnas de detalle (FF:FI / Alumno, Fecha, Bloque entra, Bloque salida)
             col_alum_det = -1
             col_fecha_det = -1
+            col_entra_det = -1
             col_salida_det = -1
 
             for idx, h in enumerate(headers):
@@ -270,33 +273,67 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                     col_alum_det = idx
                 elif "fecha" in h_norm and "deta" in h_norm:
                     col_fecha_det = idx
+                elif "bloque" in h_norm and "entra" in h_norm:
+                    col_entra_det = idx
                 elif "bloque" in h_norm and "salida" in h_norm:
                     col_salida_det = idx
 
+            detalles_ingreso = {}
             detalles_retiro = {}
-            if col_alum_det != -1 and col_salida_det != -1:
+
+            if col_alum_det != -1:
                 for row in values[1:]:
-                    if len(row) > max(col_alum_det, col_salida_det):
+                    if len(row) > col_alum_det:
                         nombre_det = normalizar_texto(row[col_alum_det])
                         fecha_det = str(row[col_fecha_det]).strip() if col_fecha_det != -1 and len(row) > col_fecha_det else ""
-                        bloque_val = row[col_salida_det]
                         
                         if not fecha_det or fecha_buscar_1 in fecha_det or fecha_buscar_2 in fecha_det or fecha_buscar_3 in fecha_det:
-                            hora_ini, num_b = obtener_hora_inicio_bloque(bloque_val)
-                            if num_b and hora_ini:
-                                detalles_retiro[nombre_det] = {
-                                    "bloque": num_b,
-                                    "hora_inicio": hora_ini
-                                }
+                            # Bloque entra
+                            if col_entra_det != -1 and len(row) > col_entra_det:
+                                bloque_e_val = row[col_entra_det]
+                                hora_ini_e, num_b_e = obtener_hora_inicio_bloque(bloque_e_val)
+                                if num_b_e and hora_ini_e:
+                                    detalles_ingreso[nombre_det] = {
+                                        "bloque": num_b_e,
+                                        "hora_inicio": hora_ini_e
+                                    }
+                            # Bloque salida
+                            if col_salida_det != -1 and len(row) > col_salida_det:
+                                bloque_s_val = row[col_salida_det]
+                                hora_ini_s, num_b_s = obtener_hora_inicio_bloque(bloque_s_val)
+                                if num_b_s and hora_ini_s:
+                                    detalles_retiro[nombre_det] = {
+                                        "bloque": num_b_s,
+                                        "hora_inicio": hora_ini_s
+                                    }
 
+            # Evaluar inasistencias, llegadas tardías y retiros
             for row in values[1:]:
                 if len(row) > 0:
                     nombre_alum_hoja = normalizar_texto(row[0])
                     val_asistencia = str(row[col_idx]).strip().upper() if col_idx != -1 and len(row) > col_idx else ""
                     
+                    # 1. Ausente total
                     if val_asistencia in ["A", "AUSENTE"] or val_asistencia.startswith("A "):
                         df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
                     
+                    # 2. Llegada tardía (T)
+                    elif val_asistencia in ["T", "TARDE"] or val_asistencia.startswith("T ") or nombre_alum_hoja in detalles_ingreso:
+                        if nombre_alum_hoja in detalles_ingreso:
+                            info_det = detalles_ingreso[nombre_alum_hoja]
+                            hora_ini = info_det["hora_inicio"]
+                            num_b = info_det["bloque"]
+                            
+                            # Si todavía no llegó la hora de ingreso, figura ausente
+                            if hora_actual_str < hora_ini:
+                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
+                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"⏰ (Ingresa Bloque {num_b} - {hora_ini} hs)"
+                            else:
+                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
+                        else:
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
+
+                    # 3. Retiro anticipado (R)
                     elif val_asistencia in ["R", "RETIRO", "RETIRADO"] or val_asistencia.startswith("R ") or nombre_alum_hoja in detalles_retiro:
                         if nombre_alum_hoja in detalles_retiro:
                             info_det = detalles_retiro[nombre_alum_hoja]
@@ -305,7 +342,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                             
                             if hora_actual_str < hora_ini:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
-                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoRetiro"] = f"🚪 (Retiro prog.: Bloque {num_b} - {hora_ini} hs)"
+                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"🚪 (Retiro prog.: Bloque {num_b} - {hora_ini} hs)"
                             else:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
                         else:
@@ -368,7 +405,6 @@ if sh:
                 df_sub = df_docente[df_docente["Materia - Docente"] == comision_docente]
                 divs_posibles = sorted([d for d in df_sub["Division_Clean"].unique() if d])
                 
-                # Si hay más de una división, muestra el selector opcional (preseleccionado en "Todas las divisiones")
                 if len(divs_posibles) > 1:
                     with col_filtro3:
                         division_seleccionada = st.selectbox(
@@ -407,10 +443,16 @@ if comision_seleccionada and division_seleccionada:
 
         for index, row in df_esperados.iterrows():
             est = str(row.get("Estado", "")).strip().lower()
+            info_nota = str(row.get("InfoNota", "")).strip()
+            
+            lbl_alum = f"{row['Alumno']} ({row['Division']})"
+            if info_nota:
+                lbl_alum += f" {info_nota}"
+
             if est == "ausente":
-                ausentes_colegio.append(f"{row['Alumno']} ({row['Division']})")
+                ausentes_colegio.append(lbl_alum)
             elif est == "retirado":
-                retirados_colegio.append(f"{row['Alumno']} ({row['Division']})")
+                retirados_colegio.append(lbl_alum)
 
         # COLUMNA IZQUIERDA: Presentes en Aula
         with col_presentes:
@@ -422,9 +464,9 @@ if comision_seleccionada and division_seleccionada:
                 if est in ["ausente", "retirado"]:
                     continue
                 
-                info_ret = str(row.get("InfoRetiro", "")).strip()
+                info_nota = str(row.get("InfoNota", "")).strip()
                 nombre_alumno = f"{row['Alumno']} ({row['Division']})"
-                label_check = f"{nombre_alumno} {info_ret}" if info_ret else nombre_alumno
+                label_check = f"{nombre_alumno} {info_nota}" if info_nota else nombre_alumno
                 
                 esta_presente = st.checkbox(
                     label_check, 
