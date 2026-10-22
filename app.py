@@ -64,6 +64,20 @@ def normalizar_division(div):
     d = re.sub(r'[^A-Z0-9]', '', d)
     return d
 
+def es_fecha_hoy(fecha_str):
+    if not fecha_str or pd.isna(fecha_str):
+        return True
+    f_str = str(fecha_str).strip()
+    if not f_str:
+        return True
+    hoy_dt = obtener_ahora()
+    match = re.search(r'(\d{1,2})[/\-](\d{1,2})', f_str)
+    if match:
+        dia = int(match.group(1))
+        mes = int(match.group(2))
+        return dia == hoy_dt.day and mes == hoy_dt.month
+    return True
+
 # -------------------------------------------------------------------
 # CONEXIÓN A GOOGLE SHEETS
 # -------------------------------------------------------------------
@@ -253,7 +267,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
 
             headers = [str(h).strip() for h in values[0]]
             
-            # Buscar columna de fecha
+            # Buscar columna de fecha del día
             col_idx = -1
             for idx, h in enumerate(headers):
                 h_norm = h.replace(" ", "")
@@ -287,7 +301,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                         nombre_det = normalizar_texto(row[col_alum_det])
                         fecha_det = str(row[col_fecha_det]).strip() if col_fecha_det != -1 and len(row) > col_fecha_det else ""
                         
-                        if not fecha_det or fecha_buscar_1 in fecha_det or fecha_buscar_2 in fecha_det or fecha_buscar_3 in fecha_det:
+                        if es_fecha_hoy(fecha_det):
                             # Bloque entra
                             if col_entra_det != -1 and len(row) > col_entra_det:
                                 bloque_e_val = row[col_entra_det]
@@ -313,28 +327,30 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                     nombre_alum_hoja = normalizar_texto(row[0])
                     val_asistencia = str(row[col_idx]).strip().upper() if col_idx != -1 and len(row) > col_idx else ""
                     
-                    # 1. Ausente total
+                    # 1. Ausente total (A)
                     if val_asistencia in ["A", "AUSENTE"] or val_asistencia.startswith("A "):
                         df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
                     
                     # 2. Llegada tardía (T)
-                    elif val_asistencia in ["T", "TARDE"] or val_asistencia.startswith("T ") or nombre_alum_hoja in detalles_ingreso:
+                    elif val_asistencia in ["T", "TARDE"] or val_asistencia.startswith("T "):
                         if nombre_alum_hoja in detalles_ingreso:
                             info_det = detalles_ingreso[nombre_alum_hoja]
                             hora_ini = info_det["hora_inicio"]
                             num_b = info_det["bloque"]
                             
-                            # Si todavía no llegó la hora de ingreso, figura ausente
+                            # Si aún no es la hora de ingreso, figura Ausente en colegio
                             if hora_actual_str < hora_ini:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"⏰ (Ingresa Bloque {num_b} - {hora_ini} hs)"
                             else:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
                         else:
-                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
+                            # Si está marcado con T, por defecto aún no está en aula
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = "⏰ (Llegada tardía)"
 
                     # 3. Retiro anticipado (R)
-                    elif val_asistencia in ["R", "RETIRO", "RETIRADO"] or val_asistencia.startswith("R ") or nombre_alum_hoja in detalles_retiro:
+                    elif val_asistencia in ["R", "RETIRO", "RETIRADO"] or val_asistencia.startswith("R "):
                         if nombre_alum_hoja in detalles_retiro:
                             info_det = detalles_retiro[nombre_alum_hoja]
                             hora_ini = info_det["hora_inicio"]
@@ -345,6 +361,26 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"🚪 (Retiro prog.: Bloque {num_b} - {hora_ini} hs)"
                             else:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
+                        else:
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
+
+                    # 4. Detalle de ingreso sin 'T' en casilla principal
+                    elif nombre_alum_hoja in detalles_ingreso:
+                        info_det = detalles_ingreso[nombre_alum_hoja]
+                        hora_ini = info_det["hora_inicio"]
+                        num_b = info_det["bloque"]
+                        if hora_actual_str < hora_ini:
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"⏰ (Ingresa Bloque {num_b} - {hora_ini} hs)"
+
+                    # 5. Detalle de retiro sin 'R' en casilla principal
+                    elif nombre_alum_hoja in detalles_retiro:
+                        info_det = detalles_retiro[nombre_alum_hoja]
+                        hora_ini = info_det["hora_inicio"]
+                        num_b = info_det["bloque"]
+                        if hora_actual_str < hora_ini:
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"🚪 (Retiro prog.: Bloque {num_b} - {hora_ini} hs)"
                         else:
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
 
