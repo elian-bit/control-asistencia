@@ -124,14 +124,20 @@ def cargar_padron():
                 
         df_padron = df_padron.rename(columns=col_map)
         
-        if "Materia - Docente" not in df_padron.columns:
-            if "Materia" in df_padron.columns and "Docente" in df_padron.columns:
-                df_padron["Materia - Docente"] = df_padron["Materia"].astype(str).str.strip() + " - " + df_padron["Docente"].astype(str).str.strip()
+        # Garantizar columnas mínimas indispensables
+        for col_req in ["Alumno", "Division", "Materia", "Docente", "Materia - Docente"]:
+            if col_req not in df_padron.columns:
+                df_padron[col_req] = ""
+
+        if "Materia - Docente" not in df_padron.columns or df_padron["Materia - Docente"].eq("").all():
+            df_padron["Materia - Docente"] = df_padron["Materia"].astype(str).str.strip() + " - " + df_padron["Docente"].astype(str).str.strip()
         
-        if "Division" in df_padron.columns:
-            df_padron["Division_Clean"] = df_padron["Division"].apply(normalizar_division)
-        else:
-            df_padron["Division_Clean"] = ""
+        # Corrección automática en memoria para Zoe Fuks
+        mask_fuks = df_padron["Alumno"].astype(str).str.contains("Fuks", case=False, na=False) & \
+                    df_padron["Alumno"].astype(str).str.contains("Zoe", case=False, na=False)
+        df_padron.loc[mask_fuks, "Division"] = "4C"
+
+        df_padron["Division_Clean"] = df_padron["Division"].apply(normalizar_division)
 
         return df_padron
     except Exception as e:
@@ -224,6 +230,9 @@ def registrar_fuga(ausentes, comision, docente, fecha, hora):
 # -------------------------------------------------------------------
 def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_seleccionada):
     try:
+        if df_padron.empty:
+            return pd.DataFrame()
+
         com_norm = normalizar_texto(comision_seleccionada)
         df_padron["_com_norm"] = df_padron["Materia - Docente"].apply(normalizar_texto)
         df_grupo = df_padron[df_padron["_com_norm"] == com_norm].copy()
@@ -338,14 +347,12 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                             hora_ini = info_det["hora_inicio"]
                             num_b = info_det["bloque"]
                             
-                            # Si aún no es la hora de ingreso, figura Ausente en colegio
                             if hora_actual_str < hora_ini:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"⏰ (Ingresa Bloque {num_b} - {hora_ini} hs)"
                             else:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
                         else:
-                            # Si está marcado con T, por defecto aún no está en aula
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = "⏰ (Llegada tardía)"
 
@@ -481,7 +488,10 @@ if comision_seleccionada and division_seleccionada:
             est = str(row.get("Estado", "")).strip().lower()
             info_nota = str(row.get("InfoNota", "")).strip()
             
-            lbl_alum = f"{row['Alumno']} ({row['Division']})"
+            alum_nom = str(row.get("Alumno", ""))
+            div_nom = str(row.get("Division", row.get("Division_Clean", "")))
+            
+            lbl_alum = f"{alum_nom} ({div_nom})" if div_nom else alum_nom
             if info_nota:
                 lbl_alum += f" {info_nota}"
 
@@ -501,19 +511,22 @@ if comision_seleccionada and division_seleccionada:
                     continue
                 
                 info_nota = str(row.get("InfoNota", "")).strip()
-                nombre_alumno = f"{row['Alumno']} ({row['Division']})"
+                alum_nom = str(row.get("Alumno", ""))
+                div_nom = str(row.get("Division", row.get("Division_Clean", "")))
+                
+                nombre_alumno = f"{alum_nom} ({div_nom})" if div_nom else alum_nom
                 label_check = f"{nombre_alumno} {info_nota}" if info_nota else nombre_alumno
                 
                 esta_presente = st.checkbox(
                     label_check, 
                     value=True, 
-                    key=f"check_{index}_{row['Alumno']}"
+                    key=f"check_{index}_{alum_nom}"
                 )
                 
                 if esta_presente:
-                    presentes_en_aula.append(row['Alumno'])
+                    presentes_en_aula.append(alum_nom)
                 else:
-                    ausentes_en_aula.append(row['Alumno'])
+                    ausentes_en_aula.append(alum_nom)
 
         # COLUMNA DERECHA: Ausentes y Retirados
         with col_ausentes:
