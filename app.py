@@ -98,12 +98,34 @@ def conectar_google_sheets():
 sh = conectar_google_sheets()
 
 # -------------------------------------------------------------------
-# FUNCIÓN CARGAR Y PREPARAR PADRÓN
+# FUNCIÓN CARGAR Y PREPARAR PADRÓN (RESISTENTE A ERRORES DE HOJA)
 # -------------------------------------------------------------------
 def cargar_padron():
     try:
         sheet_padron = sh.worksheet("Padron_Comisiones")
-        df_padron = pd.DataFrame(sheet_padron.get_all_records())
+        data = sheet_padron.get_all_values()
+        
+        if not data or len(data) < 1:
+            return pd.DataFrame()
+
+        headers = data[0]
+        rows = data[1:]
+
+        # Limpieza y desduplicación de encabezados para soportar columnas vacías
+        clean_headers = []
+        counts = {}
+        for idx, h in enumerate(headers):
+            h_str = str(h).strip()
+            if not h_str:
+                h_str = f"Columna_{idx}"
+            if h_str in counts:
+                counts[h_str] += 1
+                clean_headers.append(f"{h_str}_{counts[h_str]}")
+            else:
+                counts[h_str] = 0
+                clean_headers.append(h_str)
+
+        df_padron = pd.DataFrame(rows, columns=clean_headers)
         
         col_map = {}
         for c in df_padron.columns:
@@ -124,7 +146,7 @@ def cargar_padron():
                 
         df_padron = df_padron.rename(columns=col_map)
         
-        # Garantizar columnas mínimas indispensables
+        # Garantizar columnas indispensables
         for col_req in ["Alumno", "Division", "Materia", "Docente", "Materia - Docente"]:
             if col_req not in df_padron.columns:
                 df_padron[col_req] = ""
@@ -276,7 +298,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
 
             headers = [str(h).strip() for h in values[0]]
             
-            # Buscar columna de fecha del día
             col_idx = -1
             for idx, h in enumerate(headers):
                 h_norm = h.replace(" ", "")
@@ -284,7 +305,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                     col_idx = idx
                     break
 
-            # Buscar columnas de detalle (FF:FI / Alumno, Fecha, Bloque entra, Bloque salida)
             col_alum_det = -1
             col_fecha_det = -1
             col_entra_det = -1
@@ -311,7 +331,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                         fecha_det = str(row[col_fecha_det]).strip() if col_fecha_det != -1 and len(row) > col_fecha_det else ""
                         
                         if es_fecha_hoy(fecha_det):
-                            # Bloque entra
                             if col_entra_det != -1 and len(row) > col_entra_det:
                                 bloque_e_val = row[col_entra_det]
                                 hora_ini_e, num_b_e = obtener_hora_inicio_bloque(bloque_e_val)
@@ -320,7 +339,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                                         "bloque": num_b_e,
                                         "hora_inicio": hora_ini_e
                                     }
-                            # Bloque salida
                             if col_salida_det != -1 and len(row) > col_salida_det:
                                 bloque_s_val = row[col_salida_det]
                                 hora_ini_s, num_b_s = obtener_hora_inicio_bloque(bloque_s_val)
@@ -330,17 +348,14 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                                         "hora_inicio": hora_ini_s
                                     }
 
-            # Evaluar inasistencias, llegadas tardías y retiros
             for row in values[1:]:
                 if len(row) > 0:
                     nombre_alum_hoja = normalizar_texto(row[0])
                     val_asistencia = str(row[col_idx]).strip().upper() if col_idx != -1 and len(row) > col_idx else ""
                     
-                    # 1. Ausente total (A)
                     if val_asistencia in ["A", "AUSENTE"] or val_asistencia.startswith("A "):
                         df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
                     
-                    # 2. Llegada tardía (T)
                     elif val_asistencia in ["T", "TARDE"] or val_asistencia.startswith("T "):
                         if nombre_alum_hoja in detalles_ingreso:
                             info_det = detalles_ingreso[nombre_alum_hoja]
@@ -356,7 +371,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = "⏰ (Llegada tardía)"
 
-                    # 3. Retiro anticipado (R)
                     elif val_asistencia in ["R", "RETIRO", "RETIRADO"] or val_asistencia.startswith("R "):
                         if nombre_alum_hoja in detalles_retiro:
                             info_det = detalles_retiro[nombre_alum_hoja]
@@ -371,7 +385,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                         else:
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
 
-                    # 4. Detalle de ingreso sin 'T' en casilla principal
                     elif nombre_alum_hoja in detalles_ingreso:
                         info_det = detalles_ingreso[nombre_alum_hoja]
                         hora_ini = info_det["hora_inicio"]
@@ -380,7 +393,6 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"⏰ (Ingresa Bloque {num_b} - {hora_ini} hs)"
 
-                    # 5. Detalle de retiro sin 'R' en casilla principal
                     elif nombre_alum_hoja in detalles_retiro:
                         info_det = detalles_retiro[nombre_alum_hoja]
                         hora_ini = info_det["hora_inicio"]
