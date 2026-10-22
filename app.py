@@ -98,7 +98,7 @@ def conectar_google_sheets():
 sh = conectar_google_sheets()
 
 # -------------------------------------------------------------------
-# FUNCIÓN CARGAR Y PREPARAR PADRÓN (RESISTENTE A ERRORES DE HOJA)
+# FUNCIÓN CARGAR Y PREPARAR PADRÓN (RESPALDO POR POSICIÓN DE COLUMNA)
 # -------------------------------------------------------------------
 def cargar_padron():
     try:
@@ -111,7 +111,6 @@ def cargar_padron():
         headers = data[0]
         rows = data[1:]
 
-        # Limpieza y desduplicación de encabezados para soportar columnas vacías
         clean_headers = []
         counts = {}
         for idx, h in enumerate(headers):
@@ -141,15 +140,19 @@ def cargar_padron():
                 col_map[c] = "Materia"
             elif "docente" in c_norm:
                 col_map[c] = "Docente"
-            else:
-                col_map[c] = c_clean
                 
         df_padron = df_padron.rename(columns=col_map)
         
-        # Garantizar columnas indispensables
-        for col_req in ["Alumno", "Division", "Materia", "Docente", "Materia - Docente"]:
-            if col_req not in df_padron.columns:
-                df_padron[col_req] = ""
+        # Respaldo de seguridad por posición si la Fila 1 perdió los nombres
+        cols = list(df_padron.columns)
+        if "Alumno" not in df_padron.columns and len(cols) > 0:
+            df_padron = df_padron.rename(columns={cols[0]: "Alumno"})
+        if "Division" not in df_padron.columns and len(cols) > 1:
+            df_padron = df_padron.rename(columns={cols[1]: "Division"})
+        if "Materia" not in df_padron.columns and len(cols) > 2:
+            df_padron = df_padron.rename(columns={cols[2]: "Materia"})
+        if "Docente" not in df_padron.columns and len(cols) > 3:
+            df_padron = df_padron.rename(columns={cols[3]: "Docente"})
 
         if "Materia - Docente" not in df_padron.columns or df_padron["Materia - Docente"].eq("").all():
             df_padron["Materia - Docente"] = df_padron["Materia"].astype(str).str.strip() + " - " + df_padron["Docente"].astype(str).str.strip()
@@ -500,8 +503,8 @@ if comision_seleccionada and division_seleccionada:
             est = str(row.get("Estado", "")).strip().lower()
             info_nota = str(row.get("InfoNota", "")).strip()
             
-            alum_nom = str(row.get("Alumno", ""))
-            div_nom = str(row.get("Division", row.get("Division_Clean", "")))
+            alum_nom = str(row.get("Alumno", "")).strip()
+            div_nom = str(row.get("Division", row.get("Division_Clean", ""))).strip()
             
             lbl_alum = f"{alum_nom} ({div_nom})" if div_nom else alum_nom
             if info_nota:
@@ -523,8 +526,8 @@ if comision_seleccionada and division_seleccionada:
                     continue
                 
                 info_nota = str(row.get("InfoNota", "")).strip()
-                alum_nom = str(row.get("Alumno", ""))
-                div_nom = str(row.get("Division", row.get("Division_Clean", "")))
+                alum_nom = str(row.get("Alumno", "")).strip()
+                div_nom = str(row.get("Division", row.get("Division_Clean", ""))).strip()
                 
                 nombre_alumno = f"{alum_nom} ({div_nom})" if div_nom else alum_nom
                 label_check = f"{nombre_alumno} {info_nota}" if info_nota else nombre_alumno
