@@ -399,7 +399,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = ""
 
-                    # 5. Detalle de ingreso sin 'T' ni 'P' en la casilla principal (celda no marcada o vacía)
+                    # 5. Detalle de ingreso sin 'T' ni 'P' en la casilla principal
                     elif nombre_alum_hoja in detalles_ingreso:
                         info_det = detalles_ingreso[nombre_alum_hoja]
                         hora_ini = info_det["hora_inicio"]
@@ -512,6 +512,13 @@ if comision_seleccionada and division_seleccionada:
         retirados_colegio = []
         presentes_en_aula = []
 
+        # Calcular alumnos presentes para mostrar el total en el cartel
+        candidatos_presentes = [
+            row for _, row in df_esperados.iterrows() 
+            if str(row.get("Estado", "")).strip().lower() not in ["ausente", "retirado"]
+        ]
+        total_presentes = len(candidatos_presentes)
+
         for index, row in df_esperados.iterrows():
             est = str(row.get("Estado", "")).strip().lower()
             info_nota = str(row.get("InfoNota", "")).strip()
@@ -533,6 +540,10 @@ if comision_seleccionada and division_seleccionada:
             st.subheader("✅ Presentes en Aula")
             st.caption("Desmarque a quienes NO estén en la clase")
             
+            # CARTEL GRANDE CON EL TOTAL DE ALUMNOS
+            st.info(f"### 👥 TOTAL DE ALUMNOS: {total_presentes}")
+            
+            num_alumno = 1
             for index, row in df_esperados.iterrows():
                 est = str(row.get("Estado", "")).strip().lower()
                 if est in ["ausente", "retirado"]:
@@ -542,7 +553,7 @@ if comision_seleccionada and division_seleccionada:
                 alum_nom = str(row.get("Alumno", "")).strip()
                 div_nom = str(row.get("Division", row.get("Division_Clean", ""))).strip()
                 
-                nombre_alumno = f"{alum_nom} ({div_nom})" if div_nom else alum_nom
+                nombre_alumno = f"{num_alumno}. {alum_nom} ({div_nom})" if div_nom else f"{num_alumno}. {alum_nom}"
                 label_check = f"{nombre_alumno} {info_nota}" if info_nota else nombre_alumno
                 
                 esta_presente = st.checkbox(
@@ -555,6 +566,8 @@ if comision_seleccionada and division_seleccionada:
                     presentes_en_aula.append(alum_nom)
                 else:
                     ausentes_en_aula.append(alum_nom)
+                
+                num_alumno += 1
 
         # COLUMNA DERECHA: Ausentes y Retirados
         with col_ausentes:
