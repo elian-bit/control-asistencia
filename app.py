@@ -143,7 +143,6 @@ def cargar_padron():
                 
         df_padron = df_padron.rename(columns=col_map)
         
-        # Respaldo de seguridad por posición si la Fila 1 perdió los nombres
         cols = list(df_padron.columns)
         if "Alumno" not in df_padron.columns and len(cols) > 0:
             df_padron = df_padron.rename(columns={cols[0]: "Alumno"})
@@ -356,9 +355,17 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                     nombre_alum_hoja = normalizar_texto(row[0])
                     val_asistencia = str(row[col_idx]).strip().upper() if col_idx != -1 and len(row) > col_idx else ""
                     
-                    if val_asistencia in ["A", "AUSENTE"] or val_asistencia.startswith("A "):
+                    # 1. PRESENTE EXPLÍCITO (P) EN LA CASILLA DIARIA (Prioridad Absoluta)
+                    if val_asistencia in ["P", "PRESENTE"] or val_asistencia.startswith("P "):
+                        df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
+                        df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = ""
+
+                    # 2. Ausente total (A)
+                    elif val_asistencia in ["A", "AUSENTE"] or val_asistencia.startswith("A "):
                         df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
-                    
+                        df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = ""
+
+                    # 3. Llegada tardía (T)
                     elif val_asistencia in ["T", "TARDE"] or val_asistencia.startswith("T "):
                         if nombre_alum_hoja in detalles_ingreso:
                             info_det = detalles_ingreso[nombre_alum_hoja]
@@ -370,10 +377,12 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"⏰ (Ingresa Bloque {num_b} - {hora_ini} hs)"
                             else:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
+                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = ""
                         else:
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = "⏰ (Llegada tardía)"
 
+                    # 4. Retiro anticipado (R)
                     elif val_asistencia in ["R", "RETIRO", "RETIRADO"] or val_asistencia.startswith("R "):
                         if nombre_alum_hoja in detalles_retiro:
                             info_det = detalles_retiro[nombre_alum_hoja]
@@ -385,9 +394,12 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"🚪 (Retiro prog.: Bloque {num_b} - {hora_ini} hs)"
                             else:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
+                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = ""
                         else:
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = ""
 
+                    # 5. Detalle de ingreso sin 'T' ni 'P' en la casilla principal (celda no marcada o vacía)
                     elif nombre_alum_hoja in detalles_ingreso:
                         info_det = detalles_ingreso[nombre_alum_hoja]
                         hora_ini = info_det["hora_inicio"]
@@ -396,6 +408,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Ausente"
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"⏰ (Ingresa Bloque {num_b} - {hora_ini} hs)"
 
+                    # 6. Detalle de retiro sin 'R' ni 'P' en la casilla principal
                     elif nombre_alum_hoja in detalles_retiro:
                         info_det = detalles_retiro[nombre_alum_hoja]
                         hora_ini = info_det["hora_inicio"]
