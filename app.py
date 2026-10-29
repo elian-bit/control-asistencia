@@ -333,6 +333,7 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                         fecha_det = str(row[col_fecha_det]).strip() if col_fecha_det != -1 and len(row) > col_fecha_det else ""
                         
                         if es_fecha_hoy(fecha_det):
+                            # Bloque entra
                             if col_entra_det != -1 and len(row) > col_entra_det:
                                 bloque_e_val = row[col_entra_det]
                                 hora_ini_e, num_b_e = obtener_hora_inicio_bloque(bloque_e_val)
@@ -341,12 +342,15 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                                         "bloque": num_b_e,
                                         "hora_inicio": hora_ini_e
                                     }
+                            # Bloque salida (Si se retira en el bloque N, el retiro rige desde el inicio del bloque N+1)
                             if col_salida_det != -1 and len(row) > col_salida_det:
                                 bloque_s_val = row[col_salida_det]
-                                hora_ini_s, num_b_s = obtener_hora_inicio_bloque(bloque_s_val)
-                                if num_b_s and hora_ini_s:
+                                _, num_b_s = obtener_hora_inicio_bloque(bloque_s_val)
+                                if num_b_s:
+                                    num_b_efectivo = num_b_s + 1
+                                    hora_ini_s = BLOQUES_HORARIOS_INICIO.get(num_b_efectivo, "16:30")
                                     detalles_retiro[nombre_det] = {
-                                        "bloque": num_b_s,
+                                        "bloque_cargado": num_b_s,
                                         "hora_inicio": hora_ini_s
                                     }
 
@@ -387,11 +391,11 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                         if nombre_alum_hoja in detalles_retiro:
                             info_det = detalles_retiro[nombre_alum_hoja]
                             hora_ini = info_det["hora_inicio"]
-                            num_b = info_det["bloque"]
+                            num_b_cargado = info_det["bloque_cargado"]
                             
                             if hora_actual_str < hora_ini:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
-                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"🚪 (Retiro prog.: Bloque {num_b} - {hora_ini} hs)"
+                                df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"🚪 (Retiro al finalizar Bloque {num_b_cargado} - {hora_ini} hs)"
                             else:
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
                                 df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = ""
@@ -412,10 +416,10 @@ def obtener_alumnos_esperados(df_padron, comision_seleccionada, division_selecci
                     elif nombre_alum_hoja in detalles_retiro:
                         info_det = detalles_retiro[nombre_alum_hoja]
                         hora_ini = info_det["hora_inicio"]
-                        num_b = info_det["bloque"]
+                        num_b_cargado = info_det["bloque_cargado"]
                         if hora_actual_str < hora_ini:
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Presente"
-                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"🚪 (Retiro prog.: Bloque {num_b} - {hora_ini} hs)"
+                            df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "InfoNota"] = f"🚪 (Retiro al finalizar Bloque {num_b_cargado} - {hora_ini} hs)"
                         else:
                             df_grupo.loc[df_grupo["_alum_norm"] == nombre_alum_hoja, "Estado"] = "Retirado"
 
@@ -512,7 +516,7 @@ if comision_seleccionada and division_seleccionada:
         retirados_colegio = []
         presentes_en_aula = []
 
-        # Calcular alumnos presentes para mostrar el total en el cartel
+        # Calcular alumnos presentes para el total
         candidatos_presentes = [
             row for _, row in df_esperados.iterrows() 
             if str(row.get("Estado", "")).strip().lower() not in ["ausente", "retirado"]
@@ -540,7 +544,6 @@ if comision_seleccionada and division_seleccionada:
             st.subheader("✅ Presentes en Aula")
             st.caption("Desmarque a quienes NO estén en la clase")
             
-            # CARTEL GRANDE CON EL TOTAL DE ALUMNOS
             st.info(f"### 👥 TOTAL DE ALUMNOS: {total_presentes}")
             
             num_alumno = 1
